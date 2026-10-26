@@ -39,6 +39,9 @@ int record(const runtime::Options& options) {
   }
 
   const MultirotorModel model = make_multirotor(options.frame);
+  // Before the SITL socket, so that a flight controller that is already waiting
+  // finds the drawing socket as soon as the SITL socket accepts it.
+  const ipc::VizServer viz_server{options.socket_directory / "viz.sock"};
   std::unique_ptr<runtime::FlightController> controller;
   if (options.sitl) {
     controller = std::make_unique<ipc::SitlController>(model, options.step_size,
@@ -50,7 +53,6 @@ int record(const runtime::Options& options) {
                             runtime::AsFastAsPossible{}};
 
   scene::SceneView scene{model, options.camera_distance};
-  const ipc::VizServer viz_server{options.socket_directory / "viz.sock"};
   const render::VulkanContext vulkan;
   render::OffscreenRenderer renderer{vulkan, {.width = options.width, .height = options.height},
                                      options.msaa_samples, scene.meshes()};

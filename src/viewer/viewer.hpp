@@ -2,7 +2,6 @@
 
 #include <chrono>
 #include <cstdint>
-#include <filesystem>
 #include <vector>
 
 #include "ipc/viz_server.hpp"
@@ -19,7 +18,6 @@ namespace sim::viewer {
 struct ViewerSettings {
   std::uint32_t msaa_samples = 4;  // Rounded down to what the GPU supports; 1 disables MSAA.
   double camera_distance = 2.4;    // From the follow camera to the vehicle, m.
-  std::filesystem::path viz_socket;
 };
 
 // Shows the latest simulation snapshot in a window, along with drawings received on
@@ -28,7 +26,9 @@ struct ViewerSettings {
 // window only means fewer frames are shown.
 class Viewer {
  public:
-  Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ViewerSettings& settings);
+  // Shows the drawings the server receives; it must outlive the viewer.
+  Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ipc::VizServer& viz_server,
+         const ViewerSettings& settings);
 
   Viewer(const Viewer&) = delete;
   Viewer& operator=(const Viewer&) = delete;
@@ -63,7 +63,7 @@ class Viewer {
   render::VulkanContext vulkan_;
   render::Renderer renderer_;
 
-  ipc::VizServer viz_server_;
+  const ipc::VizServer& viz_server_;
 
   HeldKeys keys_;
   runtime::PilotInput sent_input_;

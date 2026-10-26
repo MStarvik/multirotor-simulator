@@ -9,8 +9,16 @@ SI units, world frame NED, body frame FRD.
 
 **Transport.** A UNIX domain socket of type `SOCK_SEQPACKET` at
 `<socket dir>/viz.sock`. Any number of clients may connect. Messages only go to
-the simulator; nothing is sent back. The socket only exists while a viewer runs, so
-clients should treat it as optional.
+the simulator; nothing is sent back. The socket only exists while a viewer or the
+recorder runs, so clients should treat it as optional.
+
+**Connect whenever it's there.** A viewer may start after a client, or restart while
+it runs. Rather than connecting once at startup, retry now and then (say once a
+second) while not connected, and drop the connection when a send fails with anything
+but `EAGAIN`. A newly started viewer has no drawings, so after connecting, send the
+ones that don't change by themselves, such as a planned path. The simulator creates
+this socket before the SITL socket, so a flight controller always finds it once the
+SITL socket has accepted it.
 
 **Never block on it.** Send with `MSG_DONTWAIT` and drop messages that would block,
 so that drawing can never stall a flight controller, and through it the simulation.

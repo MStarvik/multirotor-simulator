@@ -17,13 +17,14 @@ vk::Extent2D to_vk(platform::Extent extent) {
 
 }  // namespace
 
-Viewer::Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ViewerSettings& settings)
+Viewer::Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ipc::VizServer& viz_server,
+               const ViewerSettings& settings)
     : runner_{runner},
       scene_{model, settings.camera_distance},
       window_{display_, "Multirotor Simulator", "multirotor-sim"},
       vulkan_{display_.native(), window_.surface()},
       renderer_{vulkan_, to_vk(window_.framebuffer_extent()), settings.msaa_samples, scene_.meshes()},
-      viz_server_{settings.viz_socket} {
+      viz_server_{viz_server} {
   window_.apply_scale();
 
   if (auto* seat = display_.seat()) {
