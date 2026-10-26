@@ -9,8 +9,8 @@
 
 namespace sim::recorder {
 
-// Encodes raw frames into a VP9 video by piping them to ffmpeg, which must be on
-// the PATH. The container follows the output's extension; use .webm.
+// Encodes raw frames by piping them to ffmpeg, which must be on the PATH. Writes an
+// animated AV1 image for a .avif output, and VP9 video otherwise (use .webm).
 class VideoEncoder {
  public:
   VideoEncoder(const std::filesystem::path& output, std::uint32_t width, std::uint32_t height,

@@ -37,7 +37,8 @@ Viewer and recorder:
   --camera-distance M distance from the follow camera to the vehicle (default: 2.4)
 
 Recorder:
-  --output FILE       video to write, e.g. flight.webm (required)
+  --output FILE       video to write (required): .webm for a VP9 video, or .avif
+                      for an animated image that browsers autoplay
   --size WxH          video size in pixels (default: 1280x720)
   --fps N             frames per second of simulated time (default: 30)
 

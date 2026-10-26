@@ -1,6 +1,7 @@
 #include "recorder/video_encoder.hpp"
 
 #include <cerrno>
+#include <cstdlib>
 #include <format>
 #include <stdexcept>
 #include <string>
@@ -26,18 +27,24 @@ namespace {
 
 VideoEncoder::VideoEncoder(const std::filesystem::path& output, std::uint32_t width, std::uint32_t height,
                            std::uint32_t frame_rate) {
-  // Raw RGBA frames in on standard input, VP9 out. CRF 32 with no bitrate cap is
-  // VP9's constant-quality mode. The color matrix and tags are BT.709, which is what
-  // browsers assume for HD video, so colors come out as rendered.
-  const std::vector<std::string> arguments{
+  // Raw RGBA frames in on standard input. The color matrix and tags are BT.709, which
+  // is what browsers assume for HD video, so colors come out as rendered.
+  std::vector<std::string> arguments{
       "ffmpeg", "-hide_banner", "-loglevel", "error", "-y",
       "-f", "rawvideo", "-pix_fmt", "rgba", "-video_size", std::format("{}x{}", width, height),
       "-framerate", std::to_string(frame_rate), "-i", "pipe:0",
       "-vf", "scale=out_color_matrix=bt709:out_range=tv", "-pix_fmt", "yuv420p",
       "-colorspace", "bt709", "-color_primaries", "bt709", "-color_trc", "bt709",
-      "-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-row-mt", "1", "-deadline", "good", "-cpu-used", "2",
-      output.native(),
   };
+  if (output.extension() == ".avif") {
+    // An animated AV1 image, which browsers autoplay and loop, e.g. in a README.
+    arguments.insert(arguments.end(), {"-c:v", "libsvtav1", "-crf", "35", "-preset", "6"});
+  } else {
+    // VP9 in constant-quality mode (a CRF and no bitrate cap).
+    arguments.insert(arguments.end(), {"-c:v", "libvpx-vp9", "-crf", "32", "-b:v", "0", "-row-mt", "1",
+                                       "-deadline", "good", "-cpu-used", "2"});
+  }
+  arguments.push_back(output.native());
 
   int fds[2];
   if (::pipe2(fds, O_CLOEXEC) != 0) {
@@ -57,7 +64,19 @@ VideoEncoder::VideoEncoder(const std::filesystem::path& output, std::uint32_t wi
   }
   argv.push_back(nullptr);
 
-  const int error = ::posix_spawnp(&ffmpeg_, "ffmpeg", &actions, nullptr, argv.data(), environ);
+  // The AV1 encoder logs straight to the terminal, ignoring -loglevel; its own
+  // variable limits it to errors, unless the user has set it.
+  std::string svt_log = "SVT_LOG=1";
+  std::vector<char*> envp;
+  for (char** variable = environ; *variable != nullptr; ++variable) {
+    envp.push_back(*variable);
+  }
+  if (std::getenv("SVT_LOG") == nullptr) {
+    envp.push_back(svt_log.data());
+  }
+  envp.push_back(nullptr);
+
+  const int error = ::posix_spawnp(&ffmpeg_, "ffmpeg", &actions, nullptr, argv.data(), envp.data());
   posix_spawn_file_actions_destroy(&actions);
   ::close(read_end);
   if (error != 0) {
