@@ -11,10 +11,13 @@ layout(location = 2) in vec3 in_color;
 
 layout(location = 0) out vec3 out_normal;  // World space.
 layout(location = 1) out vec3 out_color;
+layout(location = 2) out float out_view_depth;  // Distance along the view direction.
 
 void main() {
     gl_Position = pc.view_projection * pc.model * vec4(in_position, 1.0);
     // Model transforms are rigid, so the upper 3x3 transforms normals too.
     out_normal = mat3(pc.model) * in_normal;
     out_color = in_color;
+    // For a perspective projection, clip-space w is the view-space depth.
+    out_view_depth = gl_Position.w;
 }

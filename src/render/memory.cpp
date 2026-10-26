@@ -8,24 +8,27 @@
 namespace sim::render {
 namespace {
 
-std::uint32_t find_memory_type(const vk::raii::PhysicalDevice& physical_device,
-                               std::uint32_t allowed_types, vk::MemoryPropertyFlags properties) {
+// The first memory type that has `required`, preferring one that also has `preferred`.
+std::uint32_t find_memory_type(const vk::raii::PhysicalDevice& physical_device, std::uint32_t allowed_types,
+                               vk::MemoryPropertyFlags required, vk::MemoryPropertyFlags preferred = {}) {
   const auto memory_properties = physical_device.getMemoryProperties();
-  for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
-    if ((allowed_types & (1u << i)) != 0 &&
-        (memory_properties.memoryTypes[i].propertyFlags & properties) == properties) {
-      return i;
+  for (const vk::MemoryPropertyFlags wanted : {required | preferred, required}) {
+    for (std::uint32_t i = 0; i < memory_properties.memoryTypeCount; ++i) {
+      if ((allowed_types & (1u << i)) != 0 &&
+          (memory_properties.memoryTypes[i].propertyFlags & wanted) == wanted) {
+        return i;
+      }
     }
   }
   throw std::runtime_error{"no suitable Vulkan memory type"};
 }
 
 vk::raii::DeviceMemory allocate(const VulkanContext& context, const vk::MemoryRequirements& requirements,
-                                vk::MemoryPropertyFlags properties) {
+                                vk::MemoryPropertyFlags required, vk::MemoryPropertyFlags preferred = {}) {
   return context.device().allocateMemory({
       .allocationSize = requirements.size,
-      .memoryTypeIndex =
-          find_memory_type(context.physical_device(), requirements.memoryTypeBits, properties),
+      .memoryTypeIndex = find_memory_type(context.physical_device(), requirements.memoryTypeBits, required,
+                                          preferred),
   });
 }
 
@@ -43,6 +46,26 @@ Buffer create_host_buffer(const VulkanContext& context, vk::BufferUsageFlags usa
                                vk::MemoryPropertyFlagBits::eHostCoherent);
   result.buffer.bindMemory(*result.memory, 0);
   return result;
+}
+
+Buffer create_readback_buffer(const VulkanContext& context, vk::DeviceSize size) {
+  Buffer result;
+  result.buffer = context.device().createBuffer({
+      .size = size,
+      .usage = vk::BufferUsageFlagBits::eTransferDst,
+      .sharingMode = vk::SharingMode::eExclusive,
+  });
+  result.memory = allocate(context, result.buffer.getMemoryRequirements(),
+                           vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+                           vk::MemoryPropertyFlagBits::eHostCached);
+  result.buffer.bindMemory(*result.memory, 0);
+  return result;
+}
+
+void read_host_buffer(const Buffer& buffer, std::span<std::byte> data) {
+  const void* mapped = buffer.memory.mapMemory(0, data.size());
+  std::memcpy(data.data(), mapped, data.size());
+  buffer.memory.unmapMemory();
 }
 
 void write_host_buffer(const Buffer& buffer, std::span<const std::byte> data) {

@@ -1,4 +1,4 @@
-#include "viewer/meshes.hpp"
+#include "scene/meshes.hpp"
 
 #include <array>
 #include <cmath>
@@ -6,7 +6,7 @@
 #include <utility>
 #include <variant>
 
-namespace sim::viewer {
+namespace sim::scene {
 namespace {
 
 using render::Color;
@@ -165,4 +165,4 @@ Mesh make_drawings_mesh(const ipc::VizScene& scene) {
   return mesh;
 }
 
-}  // namespace sim::viewer
+}  // namespace sim::scene

@@ -77,6 +77,7 @@ target_link_libraries(sim_runtime
 
 add_library(sim_control STATIC
   src/control/attitude_controller.cpp
+  src/control/demo_flight.cpp
   src/control/mixer.cpp)
 target_link_libraries(sim_control
   PUBLIC sim_runtime
@@ -177,6 +178,7 @@ add_shader_library(sim_shaders
 
 add_library(sim_render STATIC
   src/render/memory.cpp
+  src/render/offscreen_renderer.cpp
   src/render/renderer.cpp
   src/render/scene_pass.cpp
   src/render/swapchain.cpp
@@ -195,14 +197,36 @@ target_compile_definitions(sim_render PUBLIC
 target_precompile_headers(sim_render PRIVATE <vulkan/vulkan_raii.hpp>)
 
 # -----------------------------------------------------------------------------
+# Scene: what is drawn for a snapshot, shared by the viewer and the recorder
+# -----------------------------------------------------------------------------
+
+add_library(sim_scene STATIC
+  src/scene/meshes.cpp
+  src/scene/scene_view.cpp
+  src/scene/transform.cpp)
+target_link_libraries(sim_scene
+  PUBLIC sim_ipc sim_runtime
+  PRIVATE sim_build_options)
+
+# -----------------------------------------------------------------------------
 # Viewer executable: simulation thread plus a window showing it
 # -----------------------------------------------------------------------------
 
 add_executable(multirotor-sim
   src/viewer/main.cpp
-  src/viewer/meshes.cpp
-  src/viewer/transform.cpp
   src/viewer/viewer.cpp)
-target_link_libraries(multirotor-sim PRIVATE sim_build_options sim_control sim_ipc sim_platform sim_render)
+target_link_libraries(multirotor-sim
+  PRIVATE sim_build_options sim_control sim_ipc sim_platform sim_render sim_scene)
 # Reuse sim_render's precompiled header instead of building a second copy.
 target_precompile_headers(multirotor-sim REUSE_FROM sim_render)
+
+# -----------------------------------------------------------------------------
+# Recorder executable: renders a flight offscreen to a video file, via ffmpeg
+# -----------------------------------------------------------------------------
+
+add_executable(multirotor-sim-record
+  src/recorder/main.cpp
+  src/recorder/video_encoder.cpp)
+target_link_libraries(multirotor-sim-record
+  PRIVATE sim_build_options sim_control sim_ipc sim_render sim_scene)
+target_precompile_headers(multirotor-sim-record REUSE_FROM sim_render)

@@ -6,6 +6,7 @@
 
 #include <sim_shaders.h>
 
+#include "render/barrier.hpp"
 #include "render/vulkan_context.hpp"
 
 namespace sim::render {
@@ -28,11 +29,28 @@ vk::raii::ShaderModule create_shader_module(const vk::raii::Device& device, cons
   });
 }
 
+// The highest sample count not above the request that color and depth both support.
+vk::SampleCountFlagBits choose_samples(const vk::raii::PhysicalDevice& physical_device, std::uint32_t requested) {
+  const auto& limits = physical_device.getProperties().limits;
+  const vk::SampleCountFlags supported = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts;
+  for (const auto samples : {vk::SampleCountFlagBits::e8, vk::SampleCountFlagBits::e4, vk::SampleCountFlagBits::e2}) {
+    if (static_cast<std::uint32_t>(samples) <= requested && (supported & samples)) {
+      return samples;
+    }
+  }
+  return vk::SampleCountFlagBits::e1;
+}
+
 }  // namespace
 
-ScenePass::ScenePass(const VulkanContext& context, vk::Format color_format, vk::Format depth_format,
-                     vk::SampleCountFlagBits samples, std::span<const Mesh> meshes) {
+ScenePass::ScenePass(const VulkanContext& context, vk::Format color_format, vk::Extent2D extent,
+                     std::uint32_t msaa_samples, std::span<const Mesh> meshes)
+    : context_{context},
+      color_format_{color_format},
+      depth_format_{choose_depth_format(context.physical_device())},
+      samples_{choose_samples(context.physical_device(), msaa_samples)} {
   const auto& device = context.device();
+  resize(extent);
 
   // All meshes share one vertex buffer.
   std::vector<Vertex> vertices;
@@ -120,7 +138,7 @@ ScenePass::ScenePass(const VulkanContext& context, vk::Format color_format, vk::
       .lineWidth = 1.0f,
   };
   const vk::PipelineMultisampleStateCreateInfo multisample{
-      .rasterizationSamples = samples,
+      .rasterizationSamples = samples_,
   };
   const vk::PipelineDepthStencilStateCreateInfo depth_stencil{
       .depthTestEnable = vk::True,
@@ -138,8 +156,8 @@ ScenePass::ScenePass(const VulkanContext& context, vk::Format color_format, vk::
   // With dynamic rendering, the pipeline declares its attachment formats directly.
   const vk::PipelineRenderingCreateInfo rendering{
       .colorAttachmentCount = 1,
-      .pColorAttachmentFormats = &color_format,
-      .depthAttachmentFormat = depth_format,
+      .pColorAttachmentFormats = &color_format_,
+      .depthAttachmentFormat = depth_format_,
   };
 
   pipeline_ = device.createGraphicsPipeline(nullptr, {
@@ -158,18 +176,82 @@ ScenePass::ScenePass(const VulkanContext& context, vk::Format color_format, vk::
   });
 }
 
-void ScenePass::record(const vk::raii::CommandBuffer& command_buffer, vk::Extent2D extent,
+void ScenePass::resize(vk::Extent2D extent) {
+  extent_ = extent;
+  depth_image_ = create_attachment_image(context_, depth_format_, extent_, samples_,
+                                         vk::ImageUsageFlagBits::eDepthStencilAttachment,
+                                         vk::ImageAspectFlagBits::eDepth);
+  if (multisampled()) {
+    // Transient: its contents only live within a frame, before being resolved.
+    color_image_ = create_attachment_image(
+        context_, color_format_, extent_, samples_,
+        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransientAttachment,
+        vk::ImageAspectFlagBits::eColor);
+  }
+}
+
+void ScenePass::record(const vk::raii::CommandBuffer& command_buffer, vk::ImageView output,
                        const FrameView& view, vk::Buffer world_vertex_buffer) const {
+  // The attachments are cleared every frame, so their old contents can be discarded.
+  // The source scopes wait for the previous frame's writes to them.
+  if (multisampled()) {
+    transition(command_buffer, *color_image_.image, vk::ImageAspectFlagBits::eColor,
+               vk::ImageLayout::eUndefined, vk::ImageLayout::eColorAttachmentOptimal,
+               vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+               vk::AccessFlagBits2::eColorAttachmentWrite,
+               vk::PipelineStageFlagBits2::eColorAttachmentOutput,
+               vk::AccessFlagBits2::eColorAttachmentWrite);
+  }
+  constexpr auto depth_stages = vk::PipelineStageFlagBits2::eEarlyFragmentTests |
+                                vk::PipelineStageFlagBits2::eLateFragmentTests;
+  transition(command_buffer, *depth_image_.image, vk::ImageAspectFlagBits::eDepth,
+             vk::ImageLayout::eUndefined, vk::ImageLayout::eDepthAttachmentOptimal, depth_stages,
+             vk::AccessFlagBits2::eDepthStencilAttachmentWrite, depth_stages,
+             vk::AccessFlagBits2::eDepthStencilAttachmentRead |
+                 vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
+
+  // With multisampling, render into the multisampled image and resolve (average the
+  // samples) into the output at the end; the samples themselves aren't kept.
+  const vk::RenderingAttachmentInfo color_attachment{
+      .imageView = multisampled() ? *color_image_.view : output,
+      .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+      .resolveMode = multisampled() ? vk::ResolveModeFlagBits::eAverage : vk::ResolveModeFlagBits::eNone,
+      .resolveImageView = multisampled() ? output : vk::ImageView{},
+      .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,
+      .loadOp = vk::AttachmentLoadOp::eClear,
+      .storeOp = multisampled() ? vk::AttachmentStoreOp::eDontCare : vk::AttachmentStoreOp::eStore,
+      .clearValue = vk::ClearValue{.color = vk::ClearColorValue{.float32 = view.clear_color}},
+  };
+  const vk::RenderingAttachmentInfo depth_attachment{
+      .imageView = *depth_image_.view,
+      .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
+      .loadOp = vk::AttachmentLoadOp::eClear,
+      .storeOp = vk::AttachmentStoreOp::eDontCare,
+      .clearValue = vk::ClearValue{.depthStencil = {.depth = 1.0f, .stencil = 0}},
+  };
+  command_buffer.beginRendering({
+      .renderArea = {.offset = {.x = 0, .y = 0}, .extent = extent_},
+      .layerCount = 1,
+      .colorAttachmentCount = 1,
+      .pColorAttachments = &color_attachment,
+      .pDepthAttachment = &depth_attachment,
+  });
+  draw(command_buffer, view, world_vertex_buffer);
+  command_buffer.endRendering();
+}
+
+void ScenePass::draw(const vk::raii::CommandBuffer& command_buffer, const FrameView& view,
+                     vk::Buffer world_vertex_buffer) const {
   command_buffer.bindPipeline(vk::PipelineBindPoint::eGraphics, *pipeline_);
   command_buffer.setViewport(0, vk::Viewport{
       .x = 0.0f,
       .y = 0.0f,
-      .width = static_cast<float>(extent.width),
-      .height = static_cast<float>(extent.height),
+      .width = static_cast<float>(extent_.width),
+      .height = static_cast<float>(extent_.height),
       .minDepth = 0.0f,
       .maxDepth = 1.0f,
   });
-  command_buffer.setScissor(0, vk::Rect2D{.offset = {.x = 0, .y = 0}, .extent = extent});
+  command_buffer.setScissor(0, vk::Rect2D{.offset = {.x = 0, .y = 0}, .extent = extent_});
   command_buffer.bindVertexBuffers(0, {*vertex_buffer_.buffer}, {vk::DeviceSize{0}});
 
   for (const DrawItem& item : view.items) {

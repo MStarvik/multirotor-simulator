@@ -11,9 +11,16 @@
 #include "render/renderer.hpp"
 #include "render/vulkan_context.hpp"
 #include "runtime/sim_runner.hpp"
+#include "scene/scene_view.hpp"
 #include "sim/multirotor.hpp"
 
 namespace sim::viewer {
+
+struct ViewerSettings {
+  std::uint32_t msaa_samples = 4;  // Rounded down to what the GPU supports; 1 disables MSAA.
+  double camera_distance = 2.4;    // From the follow camera to the vehicle, m.
+  std::filesystem::path viz_socket;
+};
 
 // Shows the latest simulation snapshot in a window, along with drawings received on
 // the viz socket, and turns keyboard input into commands for the simulation. It
@@ -21,8 +28,7 @@ namespace sim::viewer {
 // window only means fewer frames are shown.
 class Viewer {
  public:
-  Viewer(runtime::SimRunner& runner, const MultirotorModel& model, std::uint32_t msaa_samples,
-         std::filesystem::path viz_socket);
+  Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ViewerSettings& settings);
 
   Viewer(const Viewer&) = delete;
   Viewer& operator=(const Viewer&) = delete;
@@ -45,11 +51,10 @@ class Viewer {
 
   void handle_key(const platform::KeyEvent& event);
   [[nodiscard]] runtime::PilotInput pilot_input() const;
-  void update_drawings();
   void update_title(const runtime::Snapshot& snapshot);
-  void draw(const runtime::Snapshot& snapshot);
 
   runtime::SimRunner& runner_;
+  scene::SceneView scene_;
 
   // Declaration order matters: Vulkan objects must be destroyed before the
   // Wayland surface and connection they were created from.
@@ -59,8 +64,6 @@ class Viewer {
   render::Renderer renderer_;
 
   ipc::VizServer viz_server_;
-  std::uint64_t drawings_version_ = 0;
-  std::vector<render::Vertex> drawing_vertices_;
 
   HeldKeys keys_;
   runtime::PilotInput sent_input_;

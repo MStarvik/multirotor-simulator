@@ -40,13 +40,17 @@ bool has_layer(const vk::raii::Context& context, std::string_view name) {
                              });
 }
 
-vk::raii::Instance create_instance(const vk::raii::Context& context, bool validation) {
+vk::raii::Instance create_instance(const vk::raii::Context& context, bool validation, bool presenting) {
   if (context.enumerateInstanceVersion() < api_version) {
     throw std::runtime_error{"the Vulkan loader does not support Vulkan 1.4"};
   }
 
   std::vector<const char*> layers;
-  std::vector<const char*> extensions{vk::KHRSurfaceExtensionName, vk::KHRWaylandSurfaceExtensionName};
+  std::vector<const char*> extensions;
+  if (presenting) {
+    extensions.push_back(vk::KHRSurfaceExtensionName);
+    extensions.push_back(vk::KHRWaylandSurfaceExtensionName);
+  }
   if (validation) {
     layers.push_back(validation_layer.data());
     extensions.push_back(vk::EXTDebugUtilsExtensionName);
@@ -76,12 +80,13 @@ vk::raii::DebugUtilsMessengerEXT create_debug_messenger(const vk::raii::Instance
                     }};
 }
 
+// A graphics queue family that can also present to the surface, if there is one.
 std::optional<std::uint32_t> find_queue_family(const vk::raii::PhysicalDevice& device,
                                                const vk::raii::SurfaceKHR& surface) {
   const auto families = device.getQueueFamilyProperties();
   for (std::uint32_t index = 0; index < families.size(); ++index) {
     if ((families[index].queueFlags & vk::QueueFlagBits::eGraphics) &&
-        device.getSurfaceSupportKHR(index, *surface)) {
+        (*surface == nullptr || device.getSurfaceSupportKHR(index, *surface))) {
       return index;
     }
   }
@@ -105,17 +110,20 @@ VulkanContext::VulkanContext(wl_display* display, wl_surface* surface) {
                  validation_layer);
   }
 
-  instance_ = create_instance(context_, validation);
+  const bool presenting = display != nullptr && surface != nullptr;
+  instance_ = create_instance(context_, validation, presenting);
   if (validation) {
     debug_messenger_ = create_debug_messenger(instance_);
   }
-  surface_ = instance_.createWaylandSurfaceKHR({.display = display, .surface = surface});
+  if (presenting) {
+    surface_ = instance_.createWaylandSurfaceKHR({.display = display, .surface = surface});
+  }
 
   // Pick the first suitable device, preferring a discrete GPU.
   for (auto& candidate : instance_.enumeratePhysicalDevices()) {
     const auto properties = candidate.getProperties();
     const auto family = find_queue_family(candidate, surface_);
-    if (properties.apiVersion < api_version || !family || !supports_swapchain(candidate)) {
+    if (properties.apiVersion < api_version || !family || (presenting && !supports_swapchain(candidate))) {
       continue;
     }
     const bool discrete = properties.deviceType == vk::PhysicalDeviceType::eDiscreteGpu;
@@ -128,7 +136,8 @@ VulkanContext::VulkanContext(wl_display* display, wl_surface* surface) {
     }
   }
   if (*physical_device_ == nullptr) {
-    throw std::runtime_error{"no Vulkan 1.4 device can present to this Wayland surface"};
+    throw std::runtime_error{presenting ? "no Vulkan 1.4 device can present to this Wayland surface"
+                                        : "no Vulkan 1.4 device with a graphics queue"};
   }
   std::println("Using {}", physical_device_.getProperties().deviceName.data());
 
@@ -146,7 +155,10 @@ VulkanContext::VulkanContext(wl_display* display, wl_surface* surface) {
       .queueCount = 1,
       .pQueuePriorities = &queue_priority,
   };
-  const std::array extensions{vk::KHRSwapchainExtensionName};
+  std::vector<const char*> extensions;
+  if (presenting) {
+    extensions.push_back(vk::KHRSwapchainExtensionName);
+  }
 
   device_ = physical_device_.createDevice({
       .pNext = &features.get<vk::PhysicalDeviceFeatures2>(),

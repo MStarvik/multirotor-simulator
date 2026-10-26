@@ -6,12 +6,14 @@
 
 namespace sim::render {
 
-// Owns the Vulkan instance, the Wayland presentation surface, and a logical device
-// with a single queue that supports both graphics and presentation.
+// Owns the Vulkan instance, the Wayland presentation surface if any, and a logical
+// device with a single graphics queue that can also present to that surface.
 // Requires Vulkan 1.4 with dynamic rendering, synchronization2 and timeline semaphores.
 class VulkanContext {
  public:
-  VulkanContext(wl_display* display, wl_surface* surface);
+  // Without a display and surface, the context can only render offscreen, and works
+  // without a compositor or a display attached.
+  explicit VulkanContext(wl_display* display = nullptr, wl_surface* surface = nullptr);
 
   VulkanContext(const VulkanContext&) = delete;
   VulkanContext& operator=(const VulkanContext&) = delete;

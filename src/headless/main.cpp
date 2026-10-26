@@ -1,4 +1,3 @@
-#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -7,10 +6,10 @@
 #include <memory>
 #include <numbers>
 #include <print>
-#include <stop_token>
 #include <utility>
 
 #include "control/attitude_controller.hpp"
+#include "control/demo_flight.hpp"
 #include "ipc/sitl_controller.hpp"
 #include "runtime/options.hpp"
 #include "runtime/sim_runner.hpp"
@@ -26,19 +25,6 @@ namespace {
 
 using namespace sim;
 using namespace sim::runtime;
-
-struct ScriptStep {
-  double start;  // Simulation time, s.
-  PilotInput input;
-};
-
-// Take off, hover, fly forward, then hover again.
-constexpr std::array script{
-    ScriptStep{.start = 0.0, .input = {.throttle = 0.5}},
-    ScriptStep{.start = 3.0, .input = {}},
-    ScriptStep{.start = 5.0, .input = {.pitch = 0.3}},
-    ScriptStep{.start = 7.0, .input = {}},
-};
 
 double degrees(double radians) { return radians * 180.0 / std::numbers::pi; }
 
@@ -67,13 +53,10 @@ int run(const Options& options) {
   SimRunner runner{Simulation{model, options.step_size, options.seed}, std::move(controller), clock};
 
   const auto wall_start = std::chrono::steady_clock::now();
-  std::size_t next_step = 0;
+  control::DemoFlight demo_flight;
   for (double until = 1.0; ; until += 1.0) {
     const double end = std::min(until, options.duration);
-    while (next_step < script.size() && script[next_step].start < end) {
-      runner.push(SetPilotInput{script[next_step++].input});
-    }
-    runner.run(std::stop_token{}, end);
+    demo_flight.run_until(runner, end);
 
     const Snapshot& snapshot = runner.latest();
     print_state(snapshot);

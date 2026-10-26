@@ -1,9 +1,9 @@
-#include "viewer/transform.hpp"
+#include "scene/transform.hpp"
 
 #include <cmath>
 #include <cstddef>
 
-namespace sim::viewer {
+namespace sim::scene {
 namespace {
 
 // Builds a column-major matrix from values written row by row, which reads naturally.
@@ -66,4 +66,4 @@ Mat4 perspective(double vertical_fov, double aspect, double near_plane, double f
                    0.0, 0.0, -1.0, 0.0);
 }
 
-}  // namespace sim::viewer
+}  // namespace sim::scene

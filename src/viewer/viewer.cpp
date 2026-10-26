@@ -1,39 +1,15 @@
 #include "viewer/viewer.hpp"
 
-#include <array>
-#include <cmath>
 #include <format>
-#include <numbers>
 #include <stdexcept>
-#include <utility>
 
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon.h>
 
-#include "viewer/meshes.hpp"
-#include "viewer/transform.hpp"
-
 namespace sim::viewer {
 namespace {
 
-// Indices into the meshes the renderer is created with.
-constexpr std::size_t ground_mesh = 0;
-constexpr std::size_t vehicle_mesh = 1;
-
-constexpr double ground_tile_size = 1.0;  // m
-constexpr int ground_tiles_per_side = 80;
-
-// The follow camera sits at a fixed offset from the vehicle: south-west of it and
-// above (the world frame is NED, so up is -z).
-constexpr Vec3 camera_offset{-2.0, -0.9, -0.9};
-constexpr double min_camera_height = 0.3;  // m
-
-constexpr std::array sky_color{0.42f, 0.60f, 0.85f, 1.0f};
 constexpr auto title_interval = std::chrono::milliseconds{250};
-
-std::array<render::Mesh, 2> make_scene_meshes(const MultirotorModel& model) {
-  return {make_ground_mesh(ground_tile_size, ground_tiles_per_side), make_multirotor_mesh(model)};
-}
 
 vk::Extent2D to_vk(platform::Extent extent) {
   return {.width = extent.width, .height = extent.height};
@@ -41,13 +17,13 @@ vk::Extent2D to_vk(platform::Extent extent) {
 
 }  // namespace
 
-Viewer::Viewer(runtime::SimRunner& runner, const MultirotorModel& model, std::uint32_t msaa_samples,
-               std::filesystem::path viz_socket)
+Viewer::Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ViewerSettings& settings)
     : runner_{runner},
+      scene_{model, settings.camera_distance},
       window_{display_, "Multirotor Simulator", "multirotor-sim"},
       vulkan_{display_.native(), window_.surface()},
-      renderer_{vulkan_, to_vk(window_.framebuffer_extent()), msaa_samples, make_scene_meshes(model)},
-      viz_server_{std::move(viz_socket)} {
+      renderer_{vulkan_, to_vk(window_.framebuffer_extent()), settings.msaa_samples, scene_.meshes()},
+      viz_server_{settings.viz_socket} {
   window_.apply_scale();
 
   if (auto* seat = display_.seat()) {
@@ -72,13 +48,14 @@ void Viewer::run() {
       sent_input_ = input;
     }
 
-    update_drawings();
+    scene_.update_drawings(viz_server_);
     const runtime::Snapshot& snapshot = runner_.latest();
     paused_ = snapshot.paused;
     update_title(snapshot);
     // Presentation is FIFO, so this blocks at the display's refresh rate. That only
     // slows down this loop; the simulation runs on its own thread.
-    draw(snapshot);
+    const vk::Extent2D extent = renderer_.extent();
+    renderer_.draw_frame(scene_.frame(snapshot, extent.width, extent.height));
   }
 }
 
@@ -125,15 +102,6 @@ runtime::PilotInput Viewer::pilot_input() const {
   };
 }
 
-void Viewer::update_drawings() {
-  if (viz_server_.version() == drawings_version_) {
-    return;
-  }
-  const ipc::VizScene scene = viz_server_.scene();
-  drawings_version_ = scene.version;
-  drawing_vertices_ = make_drawings_mesh(scene).vertices;
-}
-
 void Viewer::update_title(const runtime::Snapshot& snapshot) {
   const auto now = std::chrono::steady_clock::now();
   if (now < next_title_update_) {
@@ -151,35 +119,6 @@ void Viewer::update_title(const runtime::Snapshot& snapshot) {
       "Multirotor Simulator — {:.1f} s, altitude {:.2f} m, {:.2f}× real time{} | {}×{}, {}× MSAA, GPU {:.3f} ms",
       snapshot.time, 0.0 - snapshot.vehicle.position.z,  // Avoids printing -0.00.
       snapshot.real_time_factor, status, extent.width, extent.height, renderer_.msaa_samples(), gpu_time_ms_));
-}
-
-void Viewer::draw(const runtime::Snapshot& snapshot) {
-  const VehicleState& vehicle = snapshot.vehicle;
-  const vk::Extent2D extent = renderer_.extent();
-  const double aspect = static_cast<double>(extent.width) / static_cast<double>(extent.height);
-
-  Vec3 eye = vehicle.position + camera_offset;
-  eye.z = std::min(eye.z, -min_camera_height);
-  const Mat4 view_projection =
-      multiply(perspective(std::numbers::pi / 3.0, aspect, 0.05, 200.0),
-               look_at(eye, vehicle.position, {0.0, 0.0, -1.0}));
-
-  // The ground is finite, so keep it centered under the vehicle. Moving it in steps
-  // of two tiles keeps the checker pattern in place.
-  const double ground_step = 2.0 * ground_tile_size;
-  const Vec3 ground_offset{std::round(vehicle.position.x / ground_step) * ground_step,
-                           std::round(vehicle.position.y / ground_step) * ground_step, 0.0};
-
-  const std::array items{
-      render::DrawItem{.mesh = ground_mesh, .model = translation(ground_offset)},
-      render::DrawItem{.mesh = vehicle_mesh, .model = rigid_transform(vehicle.position, vehicle.attitude)},
-  };
-  renderer_.draw_frame({
-      .view_projection = view_projection,
-      .clear_color = sky_color,
-      .items = items,
-      .world_vertices = drawing_vertices_,
-  });
 }
 
 }  // namespace sim::viewer

@@ -11,12 +11,20 @@ The simulation never depends on the viewer. It runs on its own thread, and the s
 simulation also runs headless, without a window or GPU, and without being tied to
 the wall clock.
 
+<!-- Video placeholder: record docs/media/circle.webm (see "Recording video"), upload
+it through GitHub's web editor, and paste the resulting link here on its own line. -->
+
+*The example SITL flight controller flying a circle, drawing its position setpoint
+(yellow), planned path (magenta) and flown trail (cyan) over the visualization
+socket. Rendered offscreen with `multirotor-sim-record`.*
+
 ## Building
 
 Requires Linux with CMake 4.0+, Ninja, a C23/C++23 compiler (GCC 15+ or
 Clang 19+), and the development packages for Vulkan 1.4 (headers, loader, `glslc`),
 Wayland (`wayland-client`, `wayland-scanner`, `wayland-protocols`) and
-`xkbcommon`. The viewer needs a Wayland compositor and a Vulkan 1.4 GPU.
+`xkbcommon`. The viewer needs a Wayland compositor and a Vulkan 1.4 GPU. Recording
+video needs a Vulkan 1.4 GPU and `ffmpeg` with VP9 (libvpx), but no display.
 
 ```sh
 cmake --preset release            # or: debug, debug-clang
@@ -38,9 +46,12 @@ Builds go to `build/<preset>/`. Debug builds enable the Vulkan validation layers
 # Headless: a scripted flight, or an external flight controller with --sitl
 ./build/release/multirotor-sim-headless --duration 60
 ./build/release/multirotor-sim-headless --sitl --duration 600
+
+# Record a video of a flight, rendered offscreen
+./build/release/multirotor-sim-record --duration 10 --output flight.webm
 ```
 
-Both programs take the same options; `--help` lists them. The main ones:
+All programs take the same options; `--help` lists them. The main ones:
 
 | Option | Meaning |
 |---|---|
@@ -49,8 +60,10 @@ Both programs take the same options; `--help` lists them. The main ones:
 | `--socket-dir DIR` | Where the sockets are created (default: `$XDG_RUNTIME_DIR/multirotor-sim`) |
 | `--seed N` | Sensor noise seed; equal seeds and inputs give identical runs |
 | `--speed F` | Speed relative to real time (viewer, or headless with `--realtime`) |
-| `--duration S` | Headless: simulated seconds to run (unpaced, unless `--realtime`) |
-| `--msaa N` | Viewer: anti-aliasing samples, 1 (off), 2, 4 or 8 |
+| `--duration S` | Headless and recorder: simulated seconds to run (headless runs unpaced, unless `--realtime`) |
+| `--msaa N` | Viewer and recorder: anti-aliasing samples, 1 (off), 2, 4 or 8 |
+| `--camera-distance M` | Viewer and recorder: distance from the follow camera to the vehicle |
+| `--output FILE`, `--size WxH`, `--fps N` | Recorder: the video file (`.webm`), its size and frame rate |
 
 Viewer keys: **W/S** climb and descend, **arrow keys** pitch and roll, **A/D**
 yaw, **Space** pause, **R** reset, **Esc** quit. With the built-in controller the
@@ -66,6 +79,21 @@ circle and draws its setpoint, plan and trail:
 ./build/release/sitl-example-client
 ```
 
+### Recording video
+
+`multirotor-sim-record` runs the simulation like the headless program, renders the
+same scene as the viewer offscreen, and encodes it with `ffmpeg`. Frames are taken
+at fixed steps of simulated time, so the video plays at real speed however long it
+took to render. It flies the scripted flight, or follows an external flight
+controller with `--sitl`, and shows drawings from the visualization socket. The
+video above was made with:
+
+```sh
+./build/release/sitl-example-client &
+./build/release/multirotor-sim-record --sitl --duration 17 --msaa 8 --camera-distance 7 \
+    --output docs/media/circle.webm
+```
+
 ## Structure
 
 | Directory | Contents |
@@ -74,7 +102,9 @@ circle and draws its setpoint, plan and trail:
 | `src/runtime` | Runs the simulation against a clock (real time, or unpaced) and publishes snapshots |
 | `src/control` | The built-in flight controller, used without `--sitl` |
 | `src/ipc` | The SITL and visualization sockets |
-| `src/platform`, `src/render`, `src/viewer` | Wayland window, Vulkan renderer, viewer |
+| `src/scene` | What is drawn for a snapshot, shared by the viewer and the recorder |
+| `src/platform`, `src/render` | Wayland window; Vulkan rendering to a window or offscreen |
+| `src/viewer`, `src/headless`, `src/recorder` | The programs |
 | `protocol/multirotor_sim` | C headers defining both socket protocols, for clients to include |
 | `examples`, `tests` | Example SITL client; tests run by `ctest` |
 

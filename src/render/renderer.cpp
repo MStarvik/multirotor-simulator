@@ -6,6 +6,7 @@
 #include <print>
 #include <stdexcept>
 
+#include "render/barrier.hpp"
 #include "render/vulkan_context.hpp"
 
 namespace sim::render {
@@ -13,52 +14,14 @@ namespace {
 
 constexpr std::uint64_t no_timeout = std::numeric_limits<std::uint64_t>::max();
 
-void transition(const vk::raii::CommandBuffer& command_buffer, vk::Image image,
-                vk::ImageAspectFlags aspect, vk::ImageLayout old_layout, vk::ImageLayout new_layout,
-                vk::PipelineStageFlags2 src_stage, vk::AccessFlags2 src_access,
-                vk::PipelineStageFlags2 dst_stage, vk::AccessFlags2 dst_access) {
-  const vk::ImageMemoryBarrier2 barrier{
-      .srcStageMask = src_stage,
-      .srcAccessMask = src_access,
-      .dstStageMask = dst_stage,
-      .dstAccessMask = dst_access,
-      .oldLayout = old_layout,
-      .newLayout = new_layout,
-      .srcQueueFamilyIndex = vk::QueueFamilyIgnored,
-      .dstQueueFamilyIndex = vk::QueueFamilyIgnored,
-      .image = image,
-      .subresourceRange = {.aspectMask = aspect,
-                           .baseMipLevel = 0,
-                           .levelCount = 1,
-                           .baseArrayLayer = 0,
-                           .layerCount = 1},
-  };
-  command_buffer.pipelineBarrier2({.imageMemoryBarrierCount = 1, .pImageMemoryBarriers = &barrier});
-}
-
-// The highest sample count not above the request that color and depth both support.
-vk::SampleCountFlagBits choose_samples(const vk::raii::PhysicalDevice& physical_device, std::uint32_t requested) {
-  const auto& limits = physical_device.getProperties().limits;
-  const vk::SampleCountFlags supported = limits.framebufferColorSampleCounts & limits.framebufferDepthSampleCounts;
-  for (const auto samples : {vk::SampleCountFlagBits::e8, vk::SampleCountFlagBits::e4, vk::SampleCountFlagBits::e2}) {
-    if (static_cast<std::uint32_t>(samples) <= requested && (supported & samples)) {
-      return samples;
-    }
-  }
-  return vk::SampleCountFlagBits::e1;
-}
-
 }  // namespace
 
 Renderer::Renderer(const VulkanContext& context, vk::Extent2D extent, std::uint32_t msaa_samples,
                    std::span<const Mesh> meshes)
     : context_{context},
       swapchain_{context, extent},
-      depth_format_{choose_depth_format(context.physical_device())},
-      samples_{choose_samples(context.physical_device(), msaa_samples)},
-      scene_pass_{context, swapchain_.format(), depth_format_, samples_, meshes} {
+      scene_pass_{context, swapchain_.format(), swapchain_.extent(), msaa_samples, meshes} {
   const auto& device = context_.device();
-  create_render_targets();
 
   // GPU timing, if the queue supports timestamps.
   const auto& physical_device = context_.physical_device();
@@ -106,7 +69,7 @@ void Renderer::resize(vk::Extent2D extent) {
   // Simple and safe: let all in-flight work finish before replacing the images.
   context_.device().waitIdle();
   swapchain_.recreate(extent);
-  create_render_targets();
+  scene_pass_.resize(swapchain_.extent());
 }
 
 std::optional<double> Renderer::take_average_gpu_time_ms() {
@@ -117,19 +80,6 @@ std::optional<double> Renderer::take_average_gpu_time_ms() {
   gpu_time_sum_ms_ = 0.0;
   gpu_time_count_ = 0;
   return average;
-}
-
-void Renderer::create_render_targets() {
-  depth_image_ = create_attachment_image(context_, depth_format_, swapchain_.extent(), samples_,
-                                         vk::ImageUsageFlagBits::eDepthStencilAttachment,
-                                         vk::ImageAspectFlagBits::eDepth);
-  if (multisampled()) {
-    // Transient: its contents only live within a frame, before being resolved.
-    color_image_ = create_attachment_image(
-        context_, swapchain_.format(), swapchain_.extent(), samples_,
-        vk::ImageUsageFlagBits::eColorAttachment | vk::ImageUsageFlagBits::eTransientAttachment,
-        vk::ImageAspectFlagBits::eColor);
-  }
 }
 
 void Renderer::collect_gpu_time(Frame& frame, std::uint32_t first_query) {
@@ -248,54 +198,7 @@ void Renderer::record(const Frame& frame, std::uint32_t image_index, std::uint32
              vk::PipelineStageFlagBits2::eColorAttachmentOutput, vk::AccessFlagBits2::eNone,
              vk::PipelineStageFlagBits2::eColorAttachmentOutput,
              vk::AccessFlagBits2::eColorAttachmentWrite);
-  if (multisampled()) {
-    // Like the depth buffer below, it's cleared every frame and reused by the next.
-    transition(cmd, *color_image_.image, vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eUndefined,
-               vk::ImageLayout::eColorAttachmentOptimal,
-               vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-               vk::AccessFlagBits2::eColorAttachmentWrite,
-               vk::PipelineStageFlagBits2::eColorAttachmentOutput,
-               vk::AccessFlagBits2::eColorAttachmentWrite);
-  }
-  // Depth is cleared every frame, so its old contents can be discarded too. The
-  // source scope waits for the previous frame's depth writes.
-  constexpr auto depth_stages = vk::PipelineStageFlagBits2::eEarlyFragmentTests |
-                                vk::PipelineStageFlagBits2::eLateFragmentTests;
-  transition(cmd, *depth_image_.image, vk::ImageAspectFlagBits::eDepth, vk::ImageLayout::eUndefined,
-             vk::ImageLayout::eDepthAttachmentOptimal, depth_stages,
-             vk::AccessFlagBits2::eDepthStencilAttachmentWrite, depth_stages,
-             vk::AccessFlagBits2::eDepthStencilAttachmentRead |
-                 vk::AccessFlagBits2::eDepthStencilAttachmentWrite);
-
-  // With multisampling, render into the multisampled image and resolve (average the
-  // samples) into the swapchain image at the end; the samples themselves aren't kept.
-  const vk::ImageView swapchain_view = swapchain_.image_view(image_index);
-  const vk::RenderingAttachmentInfo color_attachment{
-      .imageView = multisampled() ? *color_image_.view : swapchain_view,
-      .imageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-      .resolveMode = multisampled() ? vk::ResolveModeFlagBits::eAverage : vk::ResolveModeFlagBits::eNone,
-      .resolveImageView = multisampled() ? swapchain_view : vk::ImageView{},
-      .resolveImageLayout = vk::ImageLayout::eColorAttachmentOptimal,
-      .loadOp = vk::AttachmentLoadOp::eClear,
-      .storeOp = multisampled() ? vk::AttachmentStoreOp::eDontCare : vk::AttachmentStoreOp::eStore,
-      .clearValue = vk::ClearValue{.color = vk::ClearColorValue{.float32 = view.clear_color}},
-  };
-  const vk::RenderingAttachmentInfo depth_attachment{
-      .imageView = *depth_image_.view,
-      .imageLayout = vk::ImageLayout::eDepthAttachmentOptimal,
-      .loadOp = vk::AttachmentLoadOp::eClear,
-      .storeOp = vk::AttachmentStoreOp::eDontCare,
-      .clearValue = vk::ClearValue{.depthStencil = {.depth = 1.0f, .stencil = 0}},
-  };
-  cmd.beginRendering({
-      .renderArea = {.offset = {.x = 0, .y = 0}, .extent = swapchain_.extent()},
-      .layerCount = 1,
-      .colorAttachmentCount = 1,
-      .pColorAttachments = &color_attachment,
-      .pDepthAttachment = &depth_attachment,
-  });
-  scene_pass_.record(cmd, swapchain_.extent(), view, *frame.world_vertices.buffer);
-  cmd.endRendering();
+  scene_pass_.record(cmd, swapchain_.image_view(image_index), view, *frame.world_vertices.buffer);
 
   transition(cmd, image, vk::ImageAspectFlagBits::eColor, vk::ImageLayout::eColorAttachmentOptimal,
              vk::ImageLayout::ePresentSrcKHR,

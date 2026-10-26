@@ -33,13 +33,13 @@ class Renderer {
   Renderer(const Renderer&) = delete;
   Renderer& operator=(const Renderer&) = delete;
 
-  // Recreates the swapchain and depth buffer at the given size.
+  // Recreates the swapchain and the scene's attachments at the given size.
   void resize(vk::Extent2D extent);
 
   // The size of the images being rendered, which may differ slightly from the
   // requested size if the surface constrains it.
   [[nodiscard]] vk::Extent2D extent() const { return swapchain_.extent(); }
-  [[nodiscard]] std::uint32_t msaa_samples() const { return static_cast<std::uint32_t>(samples_); }
+  [[nodiscard]] std::uint32_t msaa_samples() const { return scene_pass_.msaa_samples(); }
 
   // The average GPU time per frame since the last call, from timestamp queries. Empty
   // if no frame finished in between or the queue doesn't support timestamps.
@@ -58,8 +58,6 @@ class Renderer {
     bool timestamps_written = false;  // The frame's timestamp queries hold unread results.
   };
 
-  [[nodiscard]] bool multisampled() const { return samples_ != vk::SampleCountFlagBits::e1; }
-  void create_render_targets();
   void collect_gpu_time(Frame& frame, std::uint32_t first_query);
   void upload_world_vertices(Frame& frame, std::span<const Vertex> vertices) const;
   void record(const Frame& frame, std::uint32_t image_index, std::uint32_t first_query,
@@ -67,13 +65,6 @@ class Renderer {
 
   const VulkanContext& context_;
   Swapchain swapchain_;
-  vk::Format depth_format_;
-  vk::SampleCountFlagBits samples_;
-  // With multisampling, frames render into color_image_, which is resolved into the
-  // swapchain image. A single one of each (and of the depth buffer) is enough: the
-  // barriers at the start of each frame order its use after the previous frame's.
-  Image color_image_;
-  Image depth_image_;
   // Built for the swapchain's format, which in practice stays the same on recreation.
   ScenePass scene_pass_;
   std::vector<Frame> frames_;

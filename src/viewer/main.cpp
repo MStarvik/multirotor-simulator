@@ -31,7 +31,10 @@ int main(int argc, char** argv) {
     }
     sim::runtime::SimRunner runner{sim::Simulation{model, options->step_size, options->seed},
                                    std::move(controller), sim::runtime::RealTime{.speed = options->speed}};
-    sim::viewer::Viewer viewer{runner, model, options->msaa_samples, options->socket_directory / "viz.sock"};
+    sim::viewer::Viewer viewer{runner, model,
+                               {.msaa_samples = options->msaa_samples,
+                                .camera_distance = options->camera_distance,
+                                .viz_socket = options->socket_directory / "viz.sock"}};
 
     // Declared last, so it is stopped and joined before the runner and viewer go away.
     const std::jthread simulation_thread{[&runner](std::stop_token stop) {

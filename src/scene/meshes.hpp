@@ -4,7 +4,7 @@
 #include "render/scene.hpp"
 #include "sim/multirotor.hpp"
 
-namespace sim::viewer {
+namespace sim::scene {
 
 // A simple model of the vehicle in its body frame: a body with an orange nose,
 // arms, motors, and propeller discs that are orange at the front and blue at the
@@ -18,4 +18,4 @@ namespace sim::viewer {
 // diamonds with a line down to the ground, paths become chains of thin beams.
 [[nodiscard]] render::Mesh make_drawings_mesh(const ipc::VizScene& scene);
 
-}  // namespace sim::viewer
+}  // namespace sim::scene

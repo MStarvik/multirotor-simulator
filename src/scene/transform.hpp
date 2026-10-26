@@ -6,7 +6,7 @@
 // 4×4 transforms for the renderer, built from the simulation's double-precision
 // types. All matrices are column-major.
 
-namespace sim::viewer {
+namespace sim::scene {
 
 using render::Mat4;
 
@@ -23,4 +23,4 @@ using render::Mat4;
 // Perspective projection for Vulkan: depth in [0, 1] and clip-space y pointing down.
 [[nodiscard]] Mat4 perspective(double vertical_fov, double aspect, double near_plane, double far_plane);
 
-}  // namespace sim::viewer
+}  // namespace sim::scene

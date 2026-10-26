@@ -28,6 +28,13 @@ struct Image {
 // A host-visible buffer of `size` bytes, for data the CPU writes and the GPU reads.
 Buffer create_host_buffer(const VulkanContext& context, vk::BufferUsageFlags usage, vk::DeviceSize size);
 
+// A host-visible buffer for data the GPU writes and the CPU reads, such as rendered
+// frames. Prefers cached memory, which the CPU reads much faster.
+Buffer create_readback_buffer(const VulkanContext& context, vk::DeviceSize size);
+
+// Copies the start of a host-visible buffer into data. The GPU must be done writing it.
+void read_host_buffer(const Buffer& buffer, std::span<std::byte> data);
+
 // Copies data to the start of a host-visible buffer. The GPU must not be using it.
 void write_host_buffer(const Buffer& buffer, std::span<const std::byte> data);
 

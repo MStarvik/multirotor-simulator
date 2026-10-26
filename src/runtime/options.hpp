@@ -17,8 +17,13 @@ struct Options {
   std::filesystem::path socket_directory;  // Where the SITL and drawing sockets are created.
   double speed = 1.0;      // Simulation speed relative to real time.
   std::uint32_t msaa_samples = 4;  // Viewer only: anti-aliasing samples per pixel.
+  double camera_distance = 2.4;    // Viewer only: follow camera distance, m.
   bool realtime = false;   // Headless only: pace to the wall clock.
-  double duration = 10.0;  // Headless only: simulated seconds to run.
+  double duration = 10.0;  // Headless and recorder: simulated seconds to run.
+  std::filesystem::path output;  // Recorder only: the video file to write.
+  std::uint32_t frame_rate = 30;  // Recorder only.
+  std::uint32_t width = 1280;     // Recorder only: video size in pixels.
+  std::uint32_t height = 720;
 };
 
 // Parses command-line arguments (including the program name). Returns nullopt

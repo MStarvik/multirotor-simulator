@@ -29,11 +29,17 @@ Flight controller:
 Simulation:
   --seed N            seed for sensor noise (default: 1)
   --speed FACTOR      speed relative to real time (default: 1)
-  --realtime          headless: pace to the wall clock instead of running flat out
-  --duration SECONDS  headless: simulated time to run (default: 10)
+  --realtime          headless: pace to the wall clock instead of running unpaced
+  --duration SECONDS  headless and recorder: simulated time to run (default: 10)
 
-Viewer:
+Viewer and recorder:
   --msaa N            anti-aliasing samples per pixel: 1 (off), 2, 4 or 8 (default: 4)
+  --camera-distance M distance from the follow camera to the vehicle (default: 2.4)
+
+Recorder:
+  --output FILE       video to write, e.g. flight.webm (required)
+  --size WxH          video size in pixels (default: 1280x720)
+  --fps N             frames per second of simulated time (default: 30)
 
   --help              show this help
 )";
@@ -93,6 +99,20 @@ std::optional<Options> parse_options(std::span<char* const> args) {
       options.speed = parse_number<double>(option, value());
     } else if (option == "--realtime") {
       options.realtime = true;
+    } else if (option == "--camera-distance") {
+      options.camera_distance = parse_number<double>(option, value());
+    } else if (option == "--output") {
+      options.output = value();
+    } else if (option == "--fps") {
+      options.frame_rate = parse_number<std::uint32_t>(option, value());
+    } else if (option == "--size") {
+      const std::string_view size = value();
+      const auto separator = size.find('x');
+      if (separator == std::string_view::npos) {
+        throw std::invalid_argument{std::format("--size must look like 1280x720, got '{}'", size)};
+      }
+      options.width = parse_number<std::uint32_t>(option, size.substr(0, separator));
+      options.height = parse_number<std::uint32_t>(option, size.substr(separator + 1));
     } else if (option == "--msaa") {
       options.msaa_samples = parse_number<std::uint32_t>(option, value());
     } else if (option == "--duration") {
@@ -102,8 +122,11 @@ std::optional<Options> parse_options(std::span<char* const> args) {
     }
   }
 
-  if (options.speed <= 0.0 || options.duration <= 0.0) {
-    throw std::invalid_argument{"speed and duration must be positive"};
+  if (options.speed <= 0.0 || options.duration <= 0.0 || options.camera_distance <= 0.0) {
+    throw std::invalid_argument{"speed, duration and camera distance must be positive"};
+  }
+  if (options.frame_rate == 0 || options.width == 0 || options.height == 0) {
+    throw std::invalid_argument{"frame rate and video size must be positive"};
   }
   if (const auto n = options.msaa_samples; n != 1 && n != 2 && n != 4 && n != 8) {
     throw std::invalid_argument{"--msaa must be 1, 2, 4 or 8"};
