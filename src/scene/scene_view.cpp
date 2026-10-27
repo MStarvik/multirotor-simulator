@@ -12,7 +12,7 @@ namespace {
 
 // Indices into meshes_.
 constexpr std::size_t ground_mesh = 0;
-constexpr std::size_t vehicle_mesh = 1;
+constexpr std::size_t first_vehicle_mesh = 1;
 
 constexpr double ground_tile_size = 1.0;  // m
 // Large enough that the edge is always past the fog in mesh.frag, which hides it.
@@ -30,9 +30,21 @@ constexpr std::array sky_color{0.42f, 0.60f, 0.85f, 1.0f};  // Also the fog colo
 
 }  // namespace
 
-SceneView::SceneView(const MultirotorModel& model, double camera_distance)
-    : meshes_{make_ground_mesh(ground_tile_size, ground_tiles_per_side), make_multirotor_mesh(model)},
+SceneView::SceneView(double camera_distance)
+    : meshes_{make_ground_mesh(ground_tile_size, ground_tiles_per_side)},
       camera_offset_{camera_distance * normalized(camera_direction)} {}
+
+bool SceneView::update_vehicles(const runtime::Roster& roster) {
+  if (roster.version == roster_version_) {
+    return false;
+  }
+  roster_version_ = roster.version;
+  meshes_.resize(first_vehicle_mesh);
+  for (const runtime::VehicleSpec& vehicle : roster.vehicles) {
+    meshes_.push_back(make_multirotor_mesh(vehicle.model));
+  }
+  return true;
+}
 
 void SceneView::update_drawings(const ipc::SimServer& server) {
   if (server.drawings_version() == drawings_version_) {
@@ -61,8 +73,11 @@ render::FrameView SceneView::frame(const runtime::Snapshot& snapshot, std::size_
 
   items_.clear();
   items_.push_back({.mesh = ground_mesh, .model = translation(ground_offset)});
-  for (const runtime::VehicleSnapshot& other : snapshot.vehicles) {
-    items_.push_back({.mesh = vehicle_mesh, .model = rigid_transform(other.state.position, other.state.attitude)});
+  // Only vehicles with meshes, in case update_vehicles() wasn't called.
+  const std::size_t vehicles = std::min(snapshot.vehicles.size(), meshes_.size() - first_vehicle_mesh);
+  for (std::size_t i = 0; i < vehicles; ++i) {
+    const VehicleState& state = snapshot.vehicles[i].state;
+    items_.push_back({.mesh = first_vehicle_mesh + i, .model = rigid_transform(state.position, state.attitude)});
   }
   return {
       .view_projection = view_projection,

@@ -13,7 +13,6 @@
 #include "render/vulkan_context.hpp"
 #include "runtime/sim_runner.hpp"
 #include "scene/scene_view.hpp"
-#include "sim/multirotor.hpp"
 
 namespace sim::viewer {
 
@@ -31,8 +30,7 @@ struct ViewerSettings {
 class Viewer {
  public:
   // Shows the drawings the server receives; it must outlive the viewer.
-  Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ipc::SimServer& server,
-         const ViewerSettings& settings);
+  Viewer(runtime::SimRunner& runner, const ipc::SimServer& server, const ViewerSettings& settings);
 
   Viewer(const Viewer&) = delete;
   Viewer& operator=(const Viewer&) = delete;

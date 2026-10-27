@@ -52,6 +52,11 @@ Builds go to `build/<preset>/`. Debug builds enable the Vulkan validation layers
 
 # Three vehicles, each waiting for its own flight controller
 ./build/release/multirotor-sim --sitl --vehicle alpha --vehicle bravo --vehicle charlie
+
+# Control a running simulator: add or remove vehicles, pause, change speed
+./build/release/multirotor-sim-ctl spawn delta --at 0,6 --rotors 6
+./build/release/multirotor-sim-ctl remove delta
+./build/release/multirotor-sim-ctl pause
 ```
 
 All programs take the same options; `--help` lists them. The main ones:
@@ -79,7 +84,9 @@ title shows simulation time, altitude, real-time factor and GPU time per frame.
 ### Several vehicles and simulators
 
 Vehicles start on the ground in a row heading east from the origin, a couple of
-meters apart. They don't collide with each other. With `--sitl`, each waits for its
+meters apart, and more can be added and removed while the simulator runs, with
+`multirotor-sim-ctl` or any client of the simulator socket. They don't collide with
+each other. With `--sitl`, each waits for its
 own flight controller, and the simulation steps once all of them have answered, so
 it doesn't start until every one has connected.
 
@@ -144,7 +151,7 @@ shown, such as in this README. The animation above was made with:
 | `src/app` | Sets up the vehicles and their flight controllers from the options, for all programs |
 | `src/scene` | What is drawn for a snapshot, shared by the viewer and the recorder |
 | `src/platform`, `src/render` | Wayland window; Vulkan rendering to a window or offscreen |
-| `src/viewer`, `src/headless`, `src/recorder` | The programs |
+| `src/viewer`, `src/headless`, `src/recorder`, `src/ctl` | The programs |
 | `protocol/multirotor_sim` | C headers defining both socket protocols, for clients to include |
 | `examples`, `tests` | Example SITL client; tests run by `ctest` |
 

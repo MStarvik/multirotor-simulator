@@ -5,6 +5,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "sim/multirotor.hpp"
@@ -32,6 +33,9 @@ struct Options {
   std::uint32_t width = 1280;     // Recorder only: video size in pixels.
   std::uint32_t height = 720;
 };
+
+// Where the sockets of the simulator with this instance name are, by default.
+[[nodiscard]] std::filesystem::path default_socket_directory(std::string_view instance);
 
 // Parses command-line arguments (including the program name). Returns nullopt
 // after printing usage for --help; throws std::invalid_argument on bad input.

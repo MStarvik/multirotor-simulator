@@ -20,11 +20,10 @@ vk::Extent2D to_vk(platform::Extent extent) {
 
 }  // namespace
 
-Viewer::Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ipc::SimServer& server,
-               const ViewerSettings& settings)
+Viewer::Viewer(runtime::SimRunner& runner, const ipc::SimServer& server, const ViewerSettings& settings)
     : runner_{runner},
       follow_{settings.follow},
-      scene_{model, settings.camera_distance},
+      scene_{settings.camera_distance},
       window_{display_, "Multirotor Simulator", "multirotor-sim"},
       vulkan_{display_.native(), window_.surface()},
       renderer_{vulkan_, to_vk(window_.framebuffer_extent()), settings.msaa_samples, scene_.meshes()},
@@ -58,6 +57,9 @@ void Viewer::run() {
       sent_input_ = input;
     }
 
+    if (scene_.update_vehicles(*snapshot.roster)) {
+      renderer_.set_meshes(scene_.meshes());
+    }
     scene_.update_drawings(server_);
     paused_ = snapshot.paused;
     update_title(snapshot, follow);

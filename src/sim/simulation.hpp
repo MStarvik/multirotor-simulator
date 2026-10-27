@@ -50,11 +50,14 @@ class Vehicle {
 class Simulation {
  public:
   // The seed drives all sensor noise, so equal seeds and inputs give equal runs.
-  // Each vehicle gets its own noise, derived from the seed and its index.
+  // Each vehicle gets its own noise, derived from the seed and how many vehicles
+  // were added before it.
   explicit Simulation(double step_size = 0.001, std::uint64_t seed = 1);
 
-  // Returns the new vehicle's index. Vehicles are numbered in the order they are added.
+  // Returns the new vehicle's index. Vehicles are numbered in the order they are
+  // added; removing one moves those after it down by one.
   std::size_t add_vehicle(MultirotorModel model, const VehicleState& initial_state = {});
+  void remove_vehicle(std::size_t vehicle);
 
   // Commands applied from the next step on, until replaced.
   void set_motor_commands(std::size_t vehicle, const MotorCommands& commands);
@@ -72,6 +75,7 @@ class Simulation {
   double step_size_;
   std::uint64_t seed_;
   std::uint64_t steps_ = 0;  // Counting steps avoids drift from summing step sizes.
+  std::uint64_t vehicles_added_ = 0;
   std::vector<Vehicle> vehicles_;
 };
 

@@ -3,7 +3,8 @@
 Defined in [`protocol/multirotor_sim/sim.h`](../protocol/multirotor_sim/sim.h). Any
 process, including a flight controller, can use the simulator socket to draw in the
 viewers (position setpoints, planned trajectories, flown paths and so on) and to
-control the simulation (pause, reset, speed, stick inputs).
+control the simulation (pause, reset, speed, stick inputs, adding and removing
+vehicles). `multirotor-sim-ctl` sends requests from the command line.
 
 Frames and units follow the simulator's [conventions](../README.md#conventions):
 SI units, world frame NED, body frame FRD.
@@ -64,9 +65,9 @@ client that asks for replies must read them, or they are dropped once its receiv
 buffer is full.
 
 The reply's `status` is `SIM_OK`, or why the request failed: `SIM_INVALID`
-(malformed, or invalid values), `SIM_NOT_FOUND` (no such vehicle), `SIM_EXISTS`,
-`SIM_UNSUPPORTED` (this simulator can't do that) or `SIM_FAILED`. Its `message`
-explains a failure.
+(malformed, or invalid values), `SIM_NOT_FOUND` (no such vehicle), `SIM_EXISTS`
+(a vehicle with that name exists), `SIM_UNSUPPORTED` (this simulator can't do that)
+or `SIM_FAILED`. Its `message` explains a failure.
 
 Vehicles are named by a `char[32]` holding the vehicle's name, padded with NUL
 bytes.
@@ -77,6 +78,21 @@ bytes.
 | `SIM_CTL_RESET` | header only | Puts every vehicle back where it started, and simulation time back to 0 |
 | `SIM_CTL_SET_SPEED` | `sim_ctl_set_speed` (24 bytes): `speed` | Speed relative to real time. `SIM_UNSUPPORTED` for a simulator that isn't paced to the clock, such as a headless one without `--realtime`. |
 | `SIM_CTL_PILOT_INPUT` | `sim_ctl_pilot_input` (80 bytes): `vehicle`, `sticks[4]` | Roll, pitch, yaw and throttle sticks in [−1, 1] for a vehicle's flight controller, until replaced. The built-in controller flies with them; an external one gets them in `sim_sitl_sensors.pilot`. |
+| `SIM_CTL_SPAWN_VEHICLE` | `sim_ctl_spawn_vehicle` (104 bytes): `name`, `controller`, `rotor_count`, `arm_length`, `mass`, `position[3]`, `yaw` | Adds a vehicle, which stays until removed (also after the client disconnects). See below. |
+| `SIM_CTL_REMOVE_VEHICLE` | `sim_ctl_remove_vehicle` (48 bytes): `name` | Removes a vehicle. If it had an external flight controller, that sees its SITL socket close. |
+
+**Spawning.** A spawned vehicle is a symmetric frame like the simulator's own:
+`rotor_count` (even, 4 to 12), `arm_length` (m) and `mass` (kg) left at 0 take the
+simulator's values from its command line. It starts at `position` (world frame;
+`z` ≤ 0, since down is positive) with heading `yaw` (radians clockwise from north),
+and a reset puts it back there. Its name must be unique and valid as a file name:
+up to 32 letters, digits, `-`, `_` and `.`, not starting with `.`.
+
+`controller` is `SIM_CONTROLLER_BUILT_IN` for the simulator's own attitude
+controller, flown with `SIM_CTL_PILOT_INPUT`, or `SIM_CONTROLLER_SITL` for an
+external flight controller on `<socket dir>/vehicles/<name>.sock`. That socket
+exists once the reply is sent. Like every SITL vehicle, it holds the whole
+simulation until its flight controller connects.
 
 Example, pausing and checking the answer:
 

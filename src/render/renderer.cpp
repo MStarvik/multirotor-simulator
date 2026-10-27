@@ -72,6 +72,11 @@ void Renderer::resize(vk::Extent2D extent) {
   scene_pass_.resize(swapchain_.extent());
 }
 
+void Renderer::set_meshes(std::span<const Mesh> meshes) {
+  context_.device().waitIdle();
+  scene_pass_.set_meshes(meshes);
+}
+
 std::optional<double> Renderer::take_average_gpu_time_ms() {
   if (gpu_time_count_ == 0) {
     return std::nullopt;

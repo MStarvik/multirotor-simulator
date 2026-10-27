@@ -32,7 +32,9 @@ vehicles, only when all of their flight controllers have. A slow, paused or
 debugged flight controller therefore pauses the simulation rather than falling
 behind it. If a flight controller disconnects, the simulation holds where it is
 until one connects again, and the newcomer is sent the hello and then the current
-step.
+step. Vehicles can also be added and removed while the simulator runs (see the
+[simulator protocol](sim-protocol.md)); when a vehicle is removed, its socket
+closes, and `recv()` returns 0 as when the simulator exits.
 
 Every message starts with `struct sim_sitl_header { uint32_t type; uint32_t version; }`,
 where `version` is `SIM_SITL_PROTOCOL_VERSION` (1).

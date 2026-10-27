@@ -51,22 +51,7 @@ ScenePass::ScenePass(const VulkanContext& context, vk::Format color_format, vk::
       samples_{choose_samples(context.physical_device(), msaa_samples)} {
   const auto& device = context.device();
   resize(extent);
-
-  // All meshes share one vertex buffer.
-  std::vector<Vertex> vertices;
-  for (const Mesh& mesh : meshes) {
-    meshes_.push_back({
-        .first_vertex = static_cast<std::uint32_t>(vertices.size()),
-        .vertex_count = static_cast<std::uint32_t>(mesh.vertices.size()),
-    });
-    vertices.insert(vertices.end(), mesh.vertices.begin(), mesh.vertices.end());
-  }
-  if (vertices.empty()) {
-    throw std::invalid_argument{"the scene needs at least one vertex"};
-  }
-  const auto vertex_bytes = std::as_bytes(std::span{vertices});
-  vertex_buffer_ = create_host_buffer(context, vk::BufferUsageFlagBits::eVertexBuffer, vertex_bytes.size());
-  write_host_buffer(vertex_buffer_, vertex_bytes);
+  set_meshes(meshes);
 
   const vk::PushConstantRange push_constant_range{
       .stageFlags = vk::ShaderStageFlagBits::eVertex,
@@ -174,6 +159,25 @@ ScenePass::ScenePass(const VulkanContext& context, vk::Format color_format, vk::
       .pDynamicState = &dynamic_state,
       .layout = *layout_,
   });
+}
+
+void ScenePass::set_meshes(std::span<const Mesh> meshes) {
+  // All meshes share one vertex buffer.
+  std::vector<Vertex> vertices;
+  meshes_.clear();
+  for (const Mesh& mesh : meshes) {
+    meshes_.push_back({
+        .first_vertex = static_cast<std::uint32_t>(vertices.size()),
+        .vertex_count = static_cast<std::uint32_t>(mesh.vertices.size()),
+    });
+    vertices.insert(vertices.end(), mesh.vertices.begin(), mesh.vertices.end());
+  }
+  if (vertices.empty()) {
+    throw std::invalid_argument{"the scene needs at least one vertex"};
+  }
+  const auto vertex_bytes = std::as_bytes(std::span{vertices});
+  vertex_buffer_ = create_host_buffer(context_, vk::BufferUsageFlagBits::eVertexBuffer, vertex_bytes.size());
+  write_host_buffer(vertex_buffer_, vertex_bytes);
 }
 
 void ScenePass::resize(vk::Extent2D extent) {

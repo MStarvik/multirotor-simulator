@@ -20,17 +20,16 @@ int main(int argc, char** argv) {
       return EXIT_SUCCESS;
     }
 
-    const sim::MultirotorModel model = sim::make_multirotor(options->frame);
     const sim::ipc::SocketDirectory sockets{options->socket_directory};
     sim::runtime::SimRunner runner =
         sim::app::make_runner(*options, &sockets, sim::runtime::RealTime{.speed = options->speed});
-    const sim::ipc::SimServer server{sockets.sim_socket(), runner};
+    const sim::ipc::SimServer server{sockets.sim_socket(), runner, options->frame};
     // After the simulator socket, so that a flight controller that is already
     // waiting finds it as soon as its SITL socket accepts it.
     for (sim::runtime::VehicleSpec& vehicle : sim::app::initial_vehicles(*options)) {
       runner.add_vehicle(std::move(vehicle));
     }
-    sim::viewer::Viewer viewer{runner, model, server,
+    sim::viewer::Viewer viewer{runner, server,
                                {.follow = options->follow,
                                 .msaa_samples = options->msaa_samples,
                                 .camera_distance = options->camera_distance}};

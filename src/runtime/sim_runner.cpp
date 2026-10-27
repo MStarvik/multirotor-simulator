@@ -27,6 +27,15 @@ struct Overloaded : Ts... {
 
 }  // namespace
 
+bool is_valid_name(std::string_view name) {
+  const auto allowed = [](char c) {
+    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
+           c == '_' || c == '.';
+  };
+  return !name.empty() && name.size() <= max_name_length && name.front() != '.' &&
+         std::ranges::all_of(name, allowed);
+}
+
 SimRunner::SimRunner(double step_size, std::uint64_t seed, ControllerFactory make_controller,
                      ClockPolicy clock)
     : simulation_{step_size, seed},
@@ -37,19 +46,38 @@ SimRunner::SimRunner(double step_size, std::uint64_t seed, ControllerFactory mak
 }
 
 void SimRunner::add_vehicle(VehicleSpec spec) {
+  add(std::move(spec));
+  publish();
+}
+
+void SimRunner::add(VehicleSpec spec) {
+  if (!is_valid_name(spec.name)) {
+    throw std::invalid_argument{std::format(
+        "invalid vehicle name '{}'; use up to {} letters, digits, '-', '_' and '.', not starting with '.'",
+        spec.name, max_name_length)};
+  }
   if (find_vehicle(spec.name)) {
     throw std::invalid_argument{std::format("there already is a vehicle named '{}'", spec.name)};
   }
   std::unique_ptr<FlightController> controller = make_controller_(spec);
   simulation_.add_vehicle(spec.model, spec.initial_state);
   vehicles_.push_back({.controller = std::move(controller), .answer = std::nullopt});
+  change_roster([&](std::vector<VehicleSpec>& vehicles) { vehicles.push_back(std::move(spec)); });
+}
 
+void SimRunner::remove(std::size_t index) {
+  const auto offset = static_cast<std::ptrdiff_t>(index);
+  simulation_.remove_vehicle(index);
+  vehicles_.erase(vehicles_.begin() + offset);  // Closes an external controller's socket.
+  change_roster([&](std::vector<VehicleSpec>& vehicles) { vehicles.erase(vehicles.begin() + offset); });
+}
+
+void SimRunner::change_roster(const std::function<void(std::vector<VehicleSpec>&)>& change) {
   auto roster = std::make_shared<Roster>(*roster_);
   ++roster->version;
-  roster->vehicles.push_back(std::move(spec));
+  change(roster->vehicles);
   roster_ = std::move(roster);
   next_snapshot_.vehicles.resize(vehicles_.size());
-  publish();
 }
 
 void SimRunner::push(Command command, Completion done) {
@@ -161,6 +189,27 @@ CommandResult SimRunner::apply(const Command& command) {
             }
             real_time->speed = c.speed;
             repace_ = true;
+            return {};
+          },
+          [&](const SpawnVehicle& c) -> CommandResult {
+            if (find_vehicle(c.vehicle.name)) {
+              return {Status::exists, std::format("there already is a vehicle named '{}'", c.vehicle.name)};
+            }
+            try {
+              add(c.vehicle);
+            } catch (const std::invalid_argument& error) {
+              return {Status::invalid, error.what()};
+            } catch (const std::exception& error) {
+              return {Status::failed, error.what()};
+            }
+            return {};
+          },
+          [&](const RemoveVehicle& c) -> CommandResult {
+            const auto index = find_vehicle(c.name);
+            if (!index) {
+              return {Status::not_found, std::format("there is no vehicle named '{}'", c.name)};
+            }
+            remove(*index);
             return {};
           },
       },

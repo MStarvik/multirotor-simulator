@@ -117,6 +117,13 @@ add_executable(multirotor-sim-headless src/headless/main.cpp)
 target_link_libraries(multirotor-sim-headless PRIVATE sim_build_options sim_app sim_control sim_ipc)
 
 # -----------------------------------------------------------------------------
+# Command-line tool sending requests to a running simulator
+# -----------------------------------------------------------------------------
+
+add_executable(multirotor-sim-ctl src/ctl/main.cpp)
+target_link_libraries(multirotor-sim-ctl PRIVATE sim_build_options sim_ipc)
+
+# -----------------------------------------------------------------------------
 # Example SITL flight controller, in C
 # -----------------------------------------------------------------------------
 
@@ -153,6 +160,21 @@ add_test(NAME sitl-lockstep
                   wait $simulator && exit $client]]
     sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:sitl-example-client>
     ${test_sockets}/sitl)
+# Vehicles spawned and removed while the simulator runs, through its socket.
+add_test(NAME spawn-and-remove
+  COMMAND sh -c [[tool=$2 sockets=$3
+                  "$1" --realtime --duration 30 --socket-dir "$sockets" >/dev/null & simulator=$!
+                  ctl() { "$tool" --socket-dir "$sockets" "$@"; }
+                  sleep 0.5
+                  ctl spawn alpha --at 0,5 --rotors 6 &&
+                  ! ctl spawn alpha 2>/dev/null &&
+                  ctl spawn bravo --sitl --at 0,-5 && [ -S "$sockets/vehicles/bravo.sock" ] &&
+                  ctl remove bravo && [ ! -e "$sockets/vehicles/bravo.sock" ] &&
+                  ctl remove alpha && ! ctl remove alpha 2>/dev/null &&
+                  ! ctl spawn charlie --rotors 5 2>/dev/null &&
+                  ctl speed 2 && ctl pause && ctl resume && ctl reset; result=$?
+                  kill $simulator; wait $simulator; exit $result]]
+    sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:multirotor-sim-ctl> ${test_sockets}/spawn)
 # Two vehicles in lockstep, each with its own flight controller.
 add_test(NAME sitl-two-vehicles
   COMMAND sh -c [["$1" --sitl --vehicle alpha --vehicle bravo --socket-dir "$3" --duration 20 >/dev/null &

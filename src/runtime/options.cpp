@@ -13,6 +13,8 @@
 
 #include <unistd.h>
 
+#include "runtime/sim_runner.hpp"
+
 namespace sim::runtime {
 namespace {
 
@@ -54,28 +56,13 @@ Recorder:
   --help              show this help
 )";
 
-// $XDG_RUNTIME_DIR is private to the user and cleaned up on logout, which is what
-// sockets want. Fall back to a per-user directory under /tmp.
-std::filesystem::path default_socket_directory(std::string_view instance) {
-  if (const char* runtime_directory = std::getenv("XDG_RUNTIME_DIR");
-      runtime_directory != nullptr && *runtime_directory != '\0') {
-    return std::filesystem::path{runtime_directory} / "multirotor-sim" / instance;
-  }
-  return std::filesystem::temp_directory_path() / std::format("multirotor-sim-{}", getuid()) / instance;
-}
-
 // Instance and vehicle names become part of socket paths, which are short.
 std::string_view validated_name(std::string_view option, std::string_view name) {
-  constexpr std::size_t max_length = 32;
-  const auto allowed = [](char c) {
-    return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c == '-' ||
-           c == '_' || c == '.';
-  };
-  if (name.empty() || name.size() > max_length || name.front() == '.' || !std::ranges::all_of(name, allowed)) {
+  if (!is_valid_name(name)) {
     throw std::invalid_argument{
         std::format("invalid name for {}: '{}'; use up to {} letters, digits, '-', '_' and '.', "
                     "not starting with '.'",
-                    option, name, max_length)};
+                    option, name, max_name_length)};
   }
   return name;
 }
@@ -92,6 +79,16 @@ T parse_number(std::string_view option, std::string_view text) {
 }
 
 }  // namespace
+
+// $XDG_RUNTIME_DIR is private to the user and cleaned up on logout, which is what
+// sockets want. Fall back to a per-user directory under /tmp.
+std::filesystem::path default_socket_directory(std::string_view instance) {
+  if (const char* runtime_directory = std::getenv("XDG_RUNTIME_DIR");
+      runtime_directory != nullptr && *runtime_directory != '\0') {
+    return std::filesystem::path{runtime_directory} / "multirotor-sim" / instance;
+  }
+  return std::filesystem::temp_directory_path() / std::format("multirotor-sim-{}", getuid()) / instance;
+}
 
 std::optional<Options> parse_options(std::span<char* const> args) {
   Options options;

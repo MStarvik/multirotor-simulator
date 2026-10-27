@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cerrno>
+#include <cmath>
 #include <cstdio>
 #include <cstring>
 #include <format>
@@ -115,9 +116,11 @@ class SimServer::ReplyQueue {
   std::vector<Reply> replies_;  // Guarded by mutex_.
 };
 
-SimServer::SimServer(std::filesystem::path socket_path, runtime::SimRunner& runner)
+SimServer::SimServer(std::filesystem::path socket_path, runtime::SimRunner& runner,
+                     const SymmetricFrame& default_frame)
     : listener_{std::move(socket_path)},
       runner_{runner},
+      default_frame_{default_frame},
       replies_{std::make_shared<ReplyQueue>()},
       thread_{[this](std::stop_token stop) { serve(stop); }} {
   std::println("Accepting drawings and requests on {}", listener_.path().native());
@@ -298,10 +301,54 @@ void SimServer::handle_request(Client& client, std::uint32_t type, std::span<con
                                                 .throttle = clamp(request.sticks[3])}});
       }
       break;
+    case SIM_CTL_SPAWN_VEHICLE:
+      if (expect_size(sizeof(sim_ctl_spawn_vehicle))) {
+        try {
+          submit(client, header.id, runtime::SpawnVehicle{spawn_spec(read_as<sim_ctl_spawn_vehicle>(message))});
+        } catch (const std::invalid_argument& error) {
+          reject(error.what());
+        }
+      }
+      break;
+    case SIM_CTL_REMOVE_VEHICLE:
+      if (expect_size(sizeof(sim_ctl_remove_vehicle))) {
+        submit(client, header.id,
+               runtime::RemoveVehicle{.name = read_name(read_as<sim_ctl_remove_vehicle>(message).name)});
+      }
+      break;
     default:
       reject(std::format("unknown message type {}", type));
       break;
   }
+}
+
+runtime::VehicleSpec SimServer::spawn_spec(const ::sim_ctl_spawn_vehicle& request) const {
+  SymmetricFrame frame = default_frame_;
+  if (request.rotor_count != 0) {
+    frame.rotor_count = static_cast<int>(std::min(request.rotor_count, 1000u));
+  }
+  if (request.arm_length != 0.0) {
+    frame.arm_length = request.arm_length;
+  }
+  if (request.mass != 0.0) {
+    frame.body.mass = request.mass;
+  }
+  const Vec3 position{request.position[0], request.position[1], request.position[2]};
+  if (!is_finite(position) || !std::isfinite(request.yaw) || position.z > 0.0) {
+    throw std::invalid_argument{"the position and yaw must be finite, and the position not below the ground"};
+  }
+  if (request.controller != SIM_CONTROLLER_BUILT_IN && request.controller != SIM_CONTROLLER_SITL) {
+    throw std::invalid_argument{std::format("unknown controller {}", request.controller)};
+  }
+  return {
+      .name = read_name(request.name),
+      .model = make_multirotor(frame),  // Throws std::invalid_argument for an impossible frame.
+      .initial_state = {.position = position,
+                        .attitude = from_rotation_vector({0.0, 0.0, request.yaw}),
+                        .on_ground = position.z == 0.0},
+      .controller = request.controller == SIM_CONTROLLER_SITL ? runtime::ControllerKind::sitl
+                                                              : runtime::ControllerKind::built_in,
+  };
 }
 
 void SimServer::submit(const Client& client, std::uint32_t request_id, runtime::Command command) {

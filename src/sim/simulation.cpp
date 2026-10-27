@@ -114,9 +114,12 @@ Simulation::Simulation(double step_size, std::uint64_t seed)
     : step_size_{validated_step_size(step_size)}, seed_{seed} {}
 
 std::size_t Simulation::add_vehicle(MultirotorModel model, const VehicleState& initial_state) {
-  const std::size_t index = vehicles_.size();
-  vehicles_.push_back(Vehicle{std::move(model), initial_state, step_size_, mix(seed_ ^ mix(index))});
-  return index;
+  vehicles_.push_back(Vehicle{std::move(model), initial_state, step_size_, mix(seed_ ^ mix(vehicles_added_++))});
+  return vehicles_.size() - 1;
+}
+
+void Simulation::remove_vehicle(std::size_t vehicle) {
+  vehicles_.erase(vehicles_.begin() + static_cast<std::ptrdiff_t>(vehicle));
 }
 
 void Simulation::set_motor_commands(std::size_t vehicle, const MotorCommands& commands) {

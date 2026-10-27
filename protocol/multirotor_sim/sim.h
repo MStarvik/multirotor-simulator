@@ -45,6 +45,8 @@ enum sim_message_type : uint32_t {
   SIM_CTL_RESET = 17,        // struct sim_header; puts every vehicle back where it started
   SIM_CTL_SET_SPEED = 18,    // struct sim_ctl_set_speed
   SIM_CTL_PILOT_INPUT = 19,  // struct sim_ctl_pilot_input
+  SIM_CTL_SPAWN_VEHICLE = 20,   // struct sim_ctl_spawn_vehicle
+  SIM_CTL_REMOVE_VEHICLE = 21,  // struct sim_ctl_remove_vehicle
 
   // Simulator -> client.
   SIM_CTL_REPLY = 48,  // struct sim_ctl_reply
@@ -100,6 +102,32 @@ struct sim_ctl_pilot_input {
   double sticks[4];  // Roll (+ right), pitch (+ forward), yaw (+ clockwise), throttle (+ up), in [-1, 1].
 };
 
+enum sim_controller : uint32_t {
+  SIM_CONTROLLER_BUILT_IN = 0,  // The simulator's own, flown with SIM_CTL_PILOT_INPUT.
+  SIM_CONTROLLER_SITL = 1,      // External, on <socket dir>/vehicles/<name>.sock.
+};
+
+// Adds a vehicle, generated as a symmetric frame like the simulator's own, which
+// stays until removed. The frame fields left at 0 take the simulator's values. A
+// vehicle with an external flight controller holds the whole simulation until one
+// connects to its SITL socket, which exists once the reply has been sent.
+struct sim_ctl_spawn_vehicle {
+  struct sim_header header;
+  char name[SIM_NAME_SIZE];  // Unique in the simulation.
+  uint32_t controller;       // enum sim_controller
+  uint32_t rotor_count;      // Even, 4 to 12.
+  double arm_length;         // From the center to each rotor, m.
+  double mass;               // kg
+  double position[3];        // Where it starts, and where a reset puts it. World frame, m; z <= 0.
+  double yaw;                // Heading, rad clockwise from north.
+};
+
+// Removes a vehicle. An external flight controller sees its SITL socket close.
+struct sim_ctl_remove_vehicle {
+  struct sim_header header;
+  char name[SIM_NAME_SIZE];
+};
+
 enum sim_status : int32_t {
   SIM_OK = 0,
   SIM_INVALID = 1,      // The request was malformed or had invalid values.
@@ -122,4 +150,6 @@ static_assert(sizeof(struct sim_viz_path) == 40, "unexpected padding in sim_viz_
 static_assert(sizeof(struct sim_ctl_pause) == 24, "unexpected padding in sim_ctl_pause");
 static_assert(sizeof(struct sim_ctl_set_speed) == 24, "unexpected padding in sim_ctl_set_speed");
 static_assert(sizeof(struct sim_ctl_pilot_input) == 80, "unexpected padding in sim_ctl_pilot_input");
+static_assert(sizeof(struct sim_ctl_spawn_vehicle) == 104, "unexpected padding in sim_ctl_spawn_vehicle");
+static_assert(sizeof(struct sim_ctl_remove_vehicle) == 48, "unexpected padding in sim_ctl_remove_vehicle");
 static_assert(sizeof(struct sim_ctl_reply) == 136, "unexpected padding in sim_ctl_reply");

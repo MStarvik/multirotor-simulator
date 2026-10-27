@@ -47,7 +47,7 @@ int run(const Options& options) {
       options.realtime ? ClockPolicy{RealTime{.speed = options.speed}} : ClockPolicy{AsFastAsPossible{}};
   const ipc::SocketDirectory sockets{options.socket_directory};
   SimRunner runner = app::make_runner(options, &sockets, clock);
-  const ipc::SimServer server{sockets.sim_socket(), runner};
+  const ipc::SimServer server{sockets.sim_socket(), runner, options.frame};
   // After the simulator socket, so that a flight controller that is already
   // waiting finds it as soon as its SITL socket accepts it.
   for (VehicleSpec& vehicle : app::initial_vehicles(options)) {

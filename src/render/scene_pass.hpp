@@ -14,8 +14,8 @@ namespace sim::render {
 class VulkanContext;
 
 // Draws lit, vertex-colored meshes with depth testing into an output image, with
-// optional multisampling. The meshes are uploaded once at creation; each frame draws
-// any of them with its own transform. Owns the depth buffer and the multisampled
+// optional multisampling. The meshes are uploaded at creation, and again when
+// replaced; each frame draws any of them with its own transform. Owns the depth buffer and the multisampled
 // color image, so callers only provide the image to end up in.
 class ScenePass {
  public:
@@ -26,6 +26,8 @@ class ScenePass {
 
   // Recreates the attachments for a new output size. The GPU must not be using them.
   void resize(vk::Extent2D extent);
+  // Replaces the meshes that frames refer to by index. The GPU must not be using them.
+  void set_meshes(std::span<const Mesh> meshes);
 
   [[nodiscard]] std::uint32_t msaa_samples() const { return static_cast<std::uint32_t>(samples_); }
 

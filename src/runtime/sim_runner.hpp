@@ -9,6 +9,7 @@
 #include <optional>
 #include <stop_token>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <variant>
 #include <vector>
@@ -23,6 +24,11 @@ enum class ControllerKind {
   built_in,  // The simulator's own attitude controller, flown with the sticks.
   sitl,      // An external flight controller on the vehicle's SITL socket.
 };
+
+// Instance and vehicle names become part of socket paths, which are short: up to
+// max_name_length letters, digits, '-', '_' and '.', not starting with '.'.
+inline constexpr std::size_t max_name_length = 32;
+[[nodiscard]] bool is_valid_name(std::string_view name);
 
 // Everything needed to add a vehicle to the simulation.
 struct VehicleSpec {
@@ -66,7 +72,15 @@ struct SetPaused {
 struct SetSpeed {
   double speed;
 };
-using Command = std::variant<SetPilotInput, Reset, SetPaused, SetSpeed>;
+// Adds a vehicle, which stays until removed. One with an external flight controller
+// holds the simulation until that connects.
+struct SpawnVehicle {
+  VehicleSpec vehicle;
+};
+struct RemoveVehicle {
+  std::string name;
+};
+using Command = std::variant<SetPilotInput, Reset, SetPaused, SetSpeed, SpawnVehicle, RemoveVehicle>;
 
 enum class Status { ok, invalid, not_found, exists, unsupported, failed };
 
@@ -101,7 +115,8 @@ class SimRunner {
  public:
   SimRunner(double step_size, std::uint64_t seed, ControllerFactory make_controller, ClockPolicy clock);
 
-  // Only before run() is first called. Throws if the vehicle can't be added.
+  // Only before run() is first called; later, push a SpawnVehicle. Throws if the
+  // vehicle can't be added.
   void add_vehicle(VehicleSpec spec);
 
   // Steps until the simulation time reaches `until` or a stop is requested.
@@ -121,6 +136,11 @@ class SimRunner {
   };
 
   void apply_commands();
+  // Throws std::invalid_argument if the spec is invalid, and anything the controller
+  // factory throws.
+  void add(VehicleSpec spec);
+  void remove(std::size_t index);
+  void change_roster(const std::function<void(std::vector<VehicleSpec>&)>& change);
   [[nodiscard]] CommandResult apply(const Command& command);
   // Returns the vehicle's index in the roster, if there is one with that name.
   [[nodiscard]] std::optional<std::size_t> find_vehicle(const std::string& name) const;

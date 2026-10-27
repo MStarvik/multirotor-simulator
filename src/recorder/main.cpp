@@ -37,17 +37,16 @@ int record(const runtime::Options& options) {
     throw std::invalid_argument{"--output is required (see --help)"};
   }
 
-  const MultirotorModel model = make_multirotor(options.frame);
   const ipc::SocketDirectory sockets{options.socket_directory};
   runtime::SimRunner runner = app::make_runner(options, &sockets, runtime::AsFastAsPossible{});
-  const ipc::SimServer server{sockets.sim_socket(), runner};
+  const ipc::SimServer server{sockets.sim_socket(), runner, options.frame};
   // After the simulator socket, so that a flight controller that is already
   // waiting finds it as soon as its SITL socket accepts it.
   for (runtime::VehicleSpec& vehicle : app::initial_vehicles(options)) {
     runner.add_vehicle(std::move(vehicle));
   }
 
-  scene::SceneView scene{model, options.camera_distance};
+  scene::SceneView scene{options.camera_distance};
   const render::VulkanContext vulkan;
   render::OffscreenRenderer renderer{vulkan, {.width = options.width, .height = options.height},
                                      options.msaa_samples, scene.meshes()};
@@ -65,6 +64,9 @@ int record(const runtime::Options& options) {
     }
     scene.update_drawings(server);
     const runtime::Snapshot& snapshot = runner.latest();
+    if (scene.update_vehicles(*snapshot.roster)) {
+      renderer.set_meshes(scene.meshes());
+    }
     const auto& vehicles = snapshot.roster->vehicles;
     const auto follow = static_cast<std::size_t>(
         std::ranges::find(vehicles, options.follow, &runtime::VehicleSpec::name) - vehicles.begin());

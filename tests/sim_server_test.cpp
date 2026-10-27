@@ -161,7 +161,7 @@ int main(int argc, char** argv) {
   sim::runtime::SimRunner runner{0.001, 1, [](const auto&) { return std::make_unique<IdleController>(); },
                                  sim::runtime::AsFastAsPossible{}};
   runner.add_vehicle({.name = "alpha", .model = sim::make_multirotor({}), .initial_state = {}});
-  const sim::ipc::SimServer server{socket, runner};
+  const sim::ipc::SimServer server{socket, runner, {}};
   {
     const std::jthread simulation{[&runner](std::stop_token stop) { runner.run(stop); }};
     test_drawings(server, socket);

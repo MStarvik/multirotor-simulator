@@ -17,6 +17,9 @@
 
 #include "ipc/unix_socket.hpp"
 #include "runtime/sim_runner.hpp"
+#include "sim/multirotor.hpp"
+
+struct sim_ctl_spawn_vehicle;  // From multirotor_sim/sim.h.
 
 namespace sim::ipc {
 
@@ -51,8 +54,9 @@ struct VizScene {
 // requests into commands for the runner, and answers them once applied.
 class SimServer {
  public:
-  // The runner must outlive the server.
-  SimServer(std::filesystem::path socket_path, runtime::SimRunner& runner);
+  // The runner must outlive the server. Spawned vehicles take what they don't
+  // specify from the default frame.
+  SimServer(std::filesystem::path socket_path, runtime::SimRunner& runner, const SymmetricFrame& default_frame);
   ~SimServer();
 
   SimServer(const SimServer&) = delete;
@@ -73,12 +77,15 @@ class SimServer {
   void handle_request(Client& client, std::uint32_t type, std::span<const std::byte> message);
   // Applies the command, then answers the request if it asked for an answer.
   void submit(const Client& client, std::uint32_t request_id, runtime::Command command);
+  // Throws std::invalid_argument for an invalid request.
+  [[nodiscard]] runtime::VehicleSpec spawn_spec(const ::sim_ctl_spawn_vehicle& request) const;
   void send_replies(std::span<Client> clients);
   void remove_drawings_of(std::uint64_t client);
   void changed();  // Call with mutex_ held.
 
   ListeningSocket listener_;
   runtime::SimRunner& runner_;
+  SymmetricFrame default_frame_;
   // Shared with the runner's completions, which may outlive the server.
   std::shared_ptr<ReplyQueue> replies_;
   mutable std::mutex mutex_;

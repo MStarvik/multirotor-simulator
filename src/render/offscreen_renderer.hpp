@@ -21,13 +21,17 @@ class OffscreenRenderer {
  public:
   static constexpr vk::Format format = vk::Format::eR8G8B8A8Srgb;
 
-  // The meshes are uploaded once; FrameView::items refer to them by index.
+  // FrameView::items refer to the meshes by index.
   OffscreenRenderer(const VulkanContext& context, vk::Extent2D extent, std::uint32_t msaa_samples,
                     std::span<const Mesh> meshes);
   ~OffscreenRenderer();
 
   OffscreenRenderer(const OffscreenRenderer&) = delete;
   OffscreenRenderer& operator=(const OffscreenRenderer&) = delete;
+
+  // Replaces the meshes. Frames are rendered one at a time, so the GPU is done with
+  // the old ones.
+  void set_meshes(std::span<const Mesh> meshes) { scene_pass_.set_meshes(meshes); }
 
   [[nodiscard]] vk::Extent2D extent() const { return extent_; }
   [[nodiscard]] std::uint32_t msaa_samples() const { return scene_pass_.msaa_samples(); }

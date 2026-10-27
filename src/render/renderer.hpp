@@ -23,7 +23,7 @@ class Renderer {
  public:
   static constexpr std::uint32_t frames_in_flight = 2;
 
-  // The meshes are uploaded once; FrameView::items refer to them by index.
+  // FrameView::items refer to the meshes by index.
   // msaa_samples is rounded down to a sample count the device supports; 1 disables
   // multisampling.
   Renderer(const VulkanContext& context, vk::Extent2D extent, std::uint32_t msaa_samples,
@@ -35,6 +35,9 @@ class Renderer {
 
   // Recreates the swapchain and the scene's attachments at the given size.
   void resize(vk::Extent2D extent);
+  // Replaces the meshes, waiting for the GPU to finish with the old ones. For changes
+  // that are rare, such as vehicles coming or going.
+  void set_meshes(std::span<const Mesh> meshes);
 
   // The size of the images being rendered, which may differ slightly from the
   // requested size if the surface constrains it.
