@@ -3,9 +3,10 @@
 // Wire format for the lockstep connection between the simulator and a
 // software-in-the-loop (SITL) flight controller. C23 and C++ compatible.
 //
-// Transport: a UNIX domain socket of type SOCK_SEQPACKET at <socket dir>/sitl.sock.
-// Each send() is one message, so message boundaries are preserved. The simulator
-// listens and accepts one flight controller at a time.
+// Transport: a UNIX domain socket of type SOCK_SEQPACKET per vehicle, at
+// <socket dir>/vehicles/<vehicle name>.sock. Each send() is one message, so message
+// boundaries are preserved. The simulator accepts one flight controller at a time
+// per vehicle, and steps once every vehicle's flight controller has answered.
 //
 // Both ends run on the same machine, so messages are plain structs in native byte
 // order; the static_asserts below catch layout differences. Units are SI. Frames:

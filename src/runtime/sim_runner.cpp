@@ -1,6 +1,7 @@
 #include "runtime/sim_runner.hpp"
 
 #include <chrono>
+#include <stdexcept>
 #include <thread>
 #include <utility>
 
@@ -24,9 +25,16 @@ struct Overloaded : Ts... {
 
 }  // namespace
 
-SimRunner::SimRunner(Simulation simulation, std::unique_ptr<FlightController> controller,
+SimRunner::SimRunner(Simulation simulation, std::vector<std::unique_ptr<FlightController>> controllers,
                      ClockPolicy clock)
-    : simulation_{std::move(simulation)}, controller_{std::move(controller)}, clock_{clock} {
+    : simulation_{std::move(simulation)},
+      controllers_{std::move(controllers)},
+      answers_(controllers_.size()),
+      clock_{clock} {
+  if (controllers_.size() != simulation_.vehicles().size()) {
+    throw std::invalid_argument{"need one flight controller per vehicle"};
+  }
+  next_snapshot_.vehicles.resize(controllers_.size());
   publish();
 }
 
@@ -48,9 +56,9 @@ void SimRunner::run(std::stop_token stop, double until) {
     apply_commands();
 
     const bool stepped = !paused_ && step();
-    waiting_for_controller_ = !paused_ && !stepped;
+    waiting_for_controllers_ = !paused_ && !stepped;
     if (!stepped) {
-      // Paused, or the flight controller is not ready (it waits briefly itself).
+      // Paused, or a flight controller is not ready (it waits briefly itself).
       // Either way, real-time pacing restarts from here rather than catching up.
       real_time_factor_ = 0.0;
       publish();
@@ -92,10 +100,13 @@ void SimRunner::apply_commands() {
   }
   for (const Command& command : applying_commands_) {
     std::visit(Overloaded{
-                   [&](const SetPilotInput& c) { controller_->set_pilot_input(c.input); },
+                   [&](const SetPilotInput& c) { controllers_.at(c.vehicle)->set_pilot_input(c.input); },
                    [&](const Reset&) {
                      simulation_.reset();
-                     controller_->reset();
+                     for (std::size_t i = 0; i < controllers_.size(); ++i) {
+                       controllers_[i]->reset();
+                       answers_[i].reset();  // Meant for the state before the reset.
+                     }
                    },
                    [&](const SetPaused& c) { paused_ = c.paused; },
                },
@@ -105,30 +116,49 @@ void SimRunner::apply_commands() {
 }
 
 bool SimRunner::step() {
-  const auto commands = controller_->update({
-      .step = simulation_.step_count(),
-      .time = simulation_.time(),
-      .step_size = simulation_.step_size(),
-      .sensors = simulation_.sensors(),
-      .truth = simulation_.state(),
-  });
-  if (!commands) {
+  // Every controller that hasn't answered is asked, even after one wasn't ready, so
+  // that they all work on the step at the same time.
+  bool all_answered = true;
+  for (std::size_t i = 0; i < controllers_.size(); ++i) {
+    if (answers_[i]) {
+      continue;
+    }
+    const Vehicle& vehicle = simulation_.vehicles()[i];
+    answers_[i] = controllers_[i]->update({
+        .step = simulation_.step_count(),
+        .time = simulation_.time(),
+        .step_size = simulation_.step_size(),
+        .sensors = vehicle.sensors(),
+        .truth = vehicle.state(),
+    });
+    all_answered = all_answered && answers_[i].has_value();
+  }
+  if (!all_answered) {
     return false;
   }
-  simulation_.set_motor_commands(*commands);
+
+  for (std::size_t i = 0; i < controllers_.size(); ++i) {
+    simulation_.set_motor_commands(i, *answers_[i]);
+    answers_[i].reset();
+  }
   simulation_.step();
   return true;
 }
 
 void SimRunner::publish() {
-  snapshots_.publish({
-      .time = simulation_.time(),
-      .vehicle = simulation_.state(),
-      .sensors = simulation_.sensors(),
-      .real_time_factor = real_time_factor_,
-      .paused = paused_,
-      .waiting_for_controller = waiting_for_controller_,
-  });
+  next_snapshot_.time = simulation_.time();
+  next_snapshot_.real_time_factor = real_time_factor_;
+  next_snapshot_.paused = paused_;
+  for (std::size_t i = 0; i < controllers_.size(); ++i) {
+    const Vehicle& vehicle = simulation_.vehicles()[i];
+    next_snapshot_.vehicles[i] = {
+        .state = vehicle.state(),
+        .sensors = vehicle.sensors(),
+        .waiting_for_controller = waiting_for_controllers_ && !answers_[i],
+    };
+  }
+  // Copy-assigned into a slot whose vector already has the capacity.
+  snapshots_.publish(next_snapshot_);
 }
 
 }  // namespace sim::runtime

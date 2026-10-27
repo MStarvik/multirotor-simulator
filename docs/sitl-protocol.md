@@ -6,11 +6,14 @@ which C and C++ clients include directly.
 Frames and units follow the simulator's [conventions](../README.md#conventions):
 SI units, world frame NED, body frame FRD.
 
-**Transport.** A UNIX domain socket of type `SOCK_SEQPACKET` at
-`<socket dir>/sitl.sock`. Every `send()` is one complete message, so no framing is
-needed. The simulator listens and serves one flight controller at a time. Messages
-are plain structs in native byte order, since both ends share a machine. The headers
-`static_assert` their sizes to catch layout differences.
+**Transport.** A UNIX domain socket of type `SOCK_SEQPACKET` per vehicle, at
+`<socket dir>/vehicles/<vehicle name>.sock`, where the socket directory is
+`$XDG_RUNTIME_DIR/multirotor-sim/<instance>` by default (see
+[Several vehicles and simulators](../README.md#several-vehicles-and-simulators)).
+Every `send()` is one complete message, so no framing is needed. The simulator
+serves one flight controller at a time per vehicle. Messages are plain structs in
+native byte order, since both ends share a machine. The headers `static_assert`
+their sizes to catch layout differences.
 
 **Lockstep.** The simulator drives the exchange, one round trip per step:
 
@@ -24,11 +27,12 @@ simulator                               flight controller
     ⋮                                           ⋮
 ```
 
-Simulated time advances only when the flight controller answers. A slow, paused or
+Simulated time advances only when the flight controller answers, and with several
+vehicles, only when all of their flight controllers have. A slow, paused or
 debugged flight controller therefore pauses the simulation rather than falling
-behind it. If the flight controller disconnects, the simulation holds where
-it is until one connects again, and the newcomer is sent the hello and then the
-current step.
+behind it. If a flight controller disconnects, the simulation holds where it is
+until one connects again, and the newcomer is sent the hello and then the current
+step.
 
 Every message starts with `struct sim_sitl_header { uint32_t type; uint32_t version; }`,
 where `version` is `SIM_SITL_PROTOCOL_VERSION` (1).
@@ -77,7 +81,7 @@ A minimal flight controller loop:
 
 ```c
 int fd = socket(AF_UNIX, SOCK_SEQPACKET, 0);
-connect(fd, (struct sockaddr*)&address, sizeof address);  // <socket dir>/sitl.sock
+connect(fd, (struct sockaddr*)&address, sizeof address);  // <socket dir>/vehicles/<name>.sock
 
 struct sim_sitl_hello vehicle;
 recv(fd, &vehicle, sizeof vehicle, 0);

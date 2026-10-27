@@ -24,7 +24,9 @@ void DemoFlight::run_until(runtime::SimRunner& runner, double until) {
   // Stop at each step's start, so its input applies from exactly then.
   while (next_step_ < script.size() && script[next_step_].start < until) {
     runner.run(std::stop_token{}, script[next_step_].start);
-    runner.push(runtime::SetPilotInput{script[next_step_].input});
+    for (std::size_t vehicle = 0; vehicle < runner.vehicle_count(); ++vehicle) {
+      runner.push(runtime::SetPilotInput{.vehicle = vehicle, .input = script[next_step_].input});
+    }
     ++next_step_;
   }
   runner.run(std::stop_token{}, until);

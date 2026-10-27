@@ -1,18 +1,15 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
-#include <memory>
 #include <print>
 #include <thread>
-#include <utility>
 
-#include "control/attitude_controller.hpp"
-#include "ipc/sitl_controller.hpp"
+#include "app/setup.hpp"
+#include "ipc/socket_directory.hpp"
 #include "ipc/viz_server.hpp"
 #include "runtime/options.hpp"
 #include "runtime/sim_runner.hpp"
 #include "sim/multirotor.hpp"
-#include "sim/simulation.hpp"
 #include "viewer/viewer.hpp"
 
 int main(int argc, char** argv) {
@@ -23,20 +20,16 @@ int main(int argc, char** argv) {
     }
 
     const sim::MultirotorModel model = sim::make_multirotor(options->frame);
-    // Before the SITL socket, so that a flight controller that is already waiting
-    // finds the drawing socket as soon as the SITL socket accepts it.
-    const sim::ipc::VizServer viz_server{options->socket_directory / "viz.sock"};
-    std::unique_ptr<sim::runtime::FlightController> controller;
-    if (options->sitl) {
-      controller = std::make_unique<sim::ipc::SitlController>(model, options->step_size,
-                                                              options->socket_directory / "sitl.sock");
-    } else {
-      controller = std::make_unique<sim::control::AttitudeController>(model);
-    }
-    sim::runtime::SimRunner runner{sim::Simulation{model, options->step_size, options->seed},
-                                   std::move(controller), sim::runtime::RealTime{.speed = options->speed}};
+    const sim::ipc::SocketDirectory sockets{options->socket_directory};
+    // Before the SITL sockets, so that a flight controller that is already waiting
+    // finds the drawing socket as soon as its SITL socket accepts it.
+    const sim::ipc::VizServer viz_server{sockets.viz_socket()};
+    sim::runtime::SimRunner runner =
+        sim::app::make_runner(*options, model, &sockets, sim::runtime::RealTime{.speed = options->speed});
     sim::viewer::Viewer viewer{runner, model, viz_server,
-                               {.msaa_samples = options->msaa_samples,
+                               {.vehicle_names = options->vehicles,
+                                .follow = options->follow,
+                                .msaa_samples = options->msaa_samples,
                                 .camera_distance = options->camera_distance}};
 
     // Declared last, so it is stopped and joined before the runner and viewer go away.

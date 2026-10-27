@@ -1,15 +1,16 @@
 // Example SITL flight controller for the multirotor simulator, in C23.
 //
-// Connects to the simulator's SITL socket, flies a circle, and draws the position
-// setpoint, the planned circle and the flown trail on the viz socket. When the
-// simulation ends, it prints the RMS position error and fails if it is large, so
-// it doubles as an end-to-end test.
+// Connects to a vehicle's SITL socket, flies a circle from where the vehicle
+// starts, and draws the position setpoint, the planned circle and the flown trail
+// on the viz socket. When the simulation ends, it prints the RMS position error and
+// fails if it is large, so it doubles as an end-to-end test.
 //
 // For brevity it controls position from the ground truth that the simulator sends
 // along. A real flight controller would estimate its state from the IMU and
 // barometer instead; the attitude loop here does use the gyroscope.
 //
-// Usage: sitl-example-client [socket directory]
+// Usage: sitl-example-client [--instance NAME | --socket-dir DIR] [--vehicle NAME]
+// The defaults match the simulator's: instance "default", vehicle "0".
 
 #define _POSIX_C_SOURCE 200809L  // POSIX declarations, which strict C23 mode hides.
 
@@ -29,7 +30,8 @@
 constexpr double gravity = 9.80665;  // m/s²
 constexpr double pi = 3.14159265358979323846;
 
-// The flight: climb to hover_altitude, then fly circles through the start point.
+// The flight: climb to hover_altitude above the start point, then fly circles
+// through it.
 constexpr double hover_altitude = 2.0;  // m
 constexpr double circle_start = 4.0;    // s
 constexpr double circle_radius = 3.0;   // m
@@ -72,8 +74,8 @@ typedef struct setpoint {
   vec3 position, velocity, acceleration;  // World frame (NED).
 } setpoint;
 
-static setpoint setpoint_at(double time) {
-  const vec3 hover = {0.0, 0.0, -hover_altitude};
+static setpoint setpoint_at(vec3 start, double time) {
+  const vec3 hover = {start.x, start.y, -hover_altitude};
   if (time < circle_start) {
     return (setpoint){.position = hover};
   }
@@ -212,11 +214,11 @@ static void send_path(viz_connection* viz, uint32_t id, const float points[][3],
   send_drawing(viz, buffer, sizeof path + points_size);
 }
 
-static void send_planned_circle(viz_connection* viz) {
+static void send_planned_circle(viz_connection* viz, vec3 start) {
   constexpr unsigned segments = 96;
   static float points[segments + 1][3];
   for (unsigned i = 0; i <= segments; ++i) {
-    const setpoint point = setpoint_at(circle_start + circle_period * i / segments);
+    const setpoint point = setpoint_at(start, circle_start + circle_period * i / segments);
     points[i][0] = (float)point.position.x;
     points[i][1] = (float)point.position.y;
     points[i][2] = (float)point.position.z;
@@ -226,7 +228,8 @@ static void send_planned_circle(viz_connection* viz) {
 
 // Connects to the drawing socket if not connected, trying at most once a second. A
 // viewer starts without drawings, so the lasting ones are sent on every connect.
-static void maintain_viz_connection(viz_connection* viz) {
+// Drawing ids are our own, so they can't clash with another client's.
+static void maintain_viz_connection(viz_connection* viz, vec3 start) {
   if (viz->fd >= 0 || monotonic_seconds() < viz->next_attempt) {
     return;
   }
@@ -234,24 +237,46 @@ static void maintain_viz_connection(viz_connection* viz) {
   viz->fd = connect_to(viz->path, 1);
   if (viz->fd >= 0) {
     printf("Drawing in the viewer\n");
-    send_drawing(viz, &(struct sim_viz_header){.type = SIM_VIZ_CLEAR, .version = SIM_VIZ_PROTOCOL_VERSION},
-                 sizeof(struct sim_viz_header));
-    send_planned_circle(viz);
+    send_planned_circle(viz, start);
   }
 }
 
+static void usage_error(const char* program) {
+  fprintf(stderr, "usage: %s [--instance NAME | --socket-dir DIR] [--vehicle NAME]\n", program);
+  exit(EXIT_FAILURE);
+}
+
 int main(int argc, char** argv) {
-  char directory[256];
-  if (argc > 1) {
-    snprintf(directory, sizeof directory, "%s", argv[1]);
-  } else if (getenv("XDG_RUNTIME_DIR") != nullptr) {
-    snprintf(directory, sizeof directory, "%s/multirotor-sim", getenv("XDG_RUNTIME_DIR"));
-  } else {
-    snprintf(directory, sizeof directory, "/tmp/multirotor-sim-%u", (unsigned)getuid());
+  const char* instance = "default";
+  const char* socket_dir = nullptr;
+  const char* vehicle_name = "0";
+  for (int i = 1; i < argc; ++i) {
+    if (i + 1 >= argc) {
+      usage_error(argv[0]);
+    }
+    if (strcmp(argv[i], "--instance") == 0) {
+      instance = argv[++i];
+    } else if (strcmp(argv[i], "--socket-dir") == 0) {
+      socket_dir = argv[++i];
+    } else if (strcmp(argv[i], "--vehicle") == 0) {
+      vehicle_name = argv[++i];
+    } else {
+      usage_error(argv[0]);
+    }
   }
-  char sitl_path[300];
+
+  // The simulator's socket directory: <runtime dir>/multirotor-sim/<instance>.
+  char directory[256];
+  if (socket_dir != nullptr) {
+    snprintf(directory, sizeof directory, "%s", socket_dir);
+  } else if (getenv("XDG_RUNTIME_DIR") != nullptr) {
+    snprintf(directory, sizeof directory, "%s/multirotor-sim/%s", getenv("XDG_RUNTIME_DIR"), instance);
+  } else {
+    snprintf(directory, sizeof directory, "/tmp/multirotor-sim-%u/%s", (unsigned)getuid(), instance);
+  }
+  char sitl_path[320];
   char viz_path[300];
-  snprintf(sitl_path, sizeof sitl_path, "%s/sitl.sock", directory);
+  snprintf(sitl_path, sizeof sitl_path, "%s/vehicles/%s.sock", directory, vehicle_name);
   snprintf(viz_path, sizeof viz_path, "%s/viz.sock", directory);
 
   // The simulator may still be starting, so keep trying for a while.
@@ -274,6 +299,8 @@ int main(int argc, char** argv) {
 
   static float trail[trail_capacity][3];
   uint32_t trail_length = 0;
+  vec3 start = {0};
+  bool started = false;
   double squared_error_sum = 0.0;
   unsigned long error_samples = 0;
 
@@ -289,10 +316,15 @@ int main(int argc, char** argv) {
       trail_length = 0;
       squared_error_sum = 0.0;
       error_samples = 0;
+      started = false;
+    }
+    if (!started) {
+      start = from_array(sensors.truth.position);
+      started = true;
     }
 
     const double time = (double)sensors.time_ns * 1e-9;
-    const setpoint target = setpoint_at(time);
+    const setpoint target = setpoint_at(start, time);
     struct sim_sitl_actuators actuators = {
         .header = {.type = SIM_SITL_ACTUATORS, .version = SIM_SITL_PROTOCOL_VERSION},
         .sequence = sensors.sequence,
@@ -311,7 +343,7 @@ int main(int argc, char** argv) {
     }
 
     // Draw at 50 Hz of simulated time, and extend the trail at 10 Hz.
-    maintain_viz_connection(&viz);
+    maintain_viz_connection(&viz, start);
     const uint64_t step_ms = vehicle.step_ns / 1'000'000 > 0 ? vehicle.step_ns / 1'000'000 : 1;
     if (sensors.sequence % (20 / step_ms) == 0) {
       send_marker(&viz, 1, target.position, (const float[3]){1.0f, 0.8f, 0.1f}, 0.15f);

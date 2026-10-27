@@ -2,10 +2,10 @@
 
 A small multirotor simulator for Linux, built for testing a flight control
 stack in software-in-the-loop (SITL). It simulates the rigid-body dynamics of a
-multirotor and its rotors, an IMU and a barometer. A flight controller connects
-over a UNIX domain socket and runs in lockstep with the simulation. A viewer
-written directly against Vulkan and Wayland shows the vehicle, and other processes
-can draw setpoints and trajectories in it.
+multirotor and its rotors, an IMU and a barometer, for one vehicle or several. A
+flight controller per vehicle connects over a UNIX domain socket and runs in
+lockstep with the simulation. A viewer written directly against Vulkan and Wayland
+shows the vehicles, and other processes can draw setpoints and trajectories in it.
 
 The simulation never depends on the viewer. It runs on its own thread, and the same
 simulation also runs headless, without a window or GPU, and without being tied to
@@ -49,34 +49,71 @@ Builds go to `build/<preset>/`. Debug builds enable the Vulkan validation layers
 
 # Record a video of a flight, rendered offscreen
 ./build/release/multirotor-sim-record --duration 10 --output flight.webm
+
+# Three vehicles, each waiting for its own flight controller
+./build/release/multirotor-sim --sitl --vehicle alpha --vehicle bravo --vehicle charlie
 ```
 
 All programs take the same options; `--help` lists them. The main ones:
 
 | Option | Meaning |
 |---|---|
-| `--rotors N`, `--arm-length M`, `--mass KG` | The vehicle, generated as a symmetric frame (default: 1 kg quadrotor) |
-| `--sitl` | Use an external flight controller instead of the built-in one |
-| `--socket-dir DIR` | Where the sockets are created (default: `$XDG_RUNTIME_DIR/multirotor-sim`) |
+| `--vehicle NAME`, `--vehicles N` | Add a named vehicle (repeatable), or N vehicles named 0 to N−1 (default: one vehicle, `0`) |
+| `--rotors N`, `--arm-length M`, `--mass KG` | The vehicles, generated as a symmetric frame (default: 1 kg quadrotor) |
+| `--sitl` | Use an external flight controller for each vehicle instead of the built-in one |
+| `--instance NAME` | Names this simulator, so that several can run at once (default: `default`) |
+| `--socket-dir DIR` | Where the sockets are created (default: `$XDG_RUNTIME_DIR/multirotor-sim/<instance>`) |
 | `--seed N` | Sensor noise seed; equal seeds and inputs give identical runs |
 | `--speed F` | Speed relative to real time (viewer, or headless with `--realtime`) |
 | `--duration S` | Headless and recorder: simulated seconds to run (headless runs unpaced, unless `--realtime`) |
 | `--msaa N` | Viewer and recorder: anti-aliasing samples, 1 (off), 2, 4 or 8 |
-| `--camera-distance M` | Viewer and recorder: distance from the follow camera to the vehicle |
+| `--camera-distance M`, `--follow NAME` | Viewer and recorder: distance from the follow camera to the vehicle, and which vehicle it follows |
 | `--output FILE`, `--size WxH`, `--fps N` | Recorder: the output file, its size and frame rate |
 
 Viewer keys: **W/S** climb and descend, **arrow keys** pitch and roll, **A/D**
-yaw, **Space** pause, **R** reset, **Esc** quit. With the built-in controller the
-keys fly the vehicle. With `--sitl` they are forwarded to the flight controller as
-stick inputs. The window title shows simulation time, altitude, real-time factor and
-GPU time per frame.
+yaw, **Tab** follow the next vehicle, **Space** pause, **R** reset, **Esc** quit.
+The keys fly the vehicle the camera follows: directly with the built-in controller,
+or with `--sitl` as stick inputs forwarded to its flight controller. The window
+title shows simulation time, altitude, real-time factor and GPU time per frame.
+
+### Several vehicles and simulators
+
+Vehicles start on the ground in a row heading east from the origin, a couple of
+meters apart. They don't collide with each other. With `--sitl`, each waits for its
+own flight controller, and the simulation steps once all of them have answered, so
+it doesn't start until every one has connected.
+
+Each simulator keeps its sockets in a directory of its own, named by `--instance`:
+
+```
+$XDG_RUNTIME_DIR/multirotor-sim/
+├── default/
+│   ├── viz.sock          drawings, for the whole simulation
+│   └── vehicles/
+│       └── 0.sock        SITL, one per vehicle
+└── swarm-test/           a second simulator, started with --instance swarm-test
+    ├── viz.sock
+    └── vehicles/
+        ├── alpha.sock
+        └── bravo.sock
+```
+
+A simulator claims its directory while it runs and removes it when it exits, so
+listing `multirotor-sim/` shows what is running, and a second simulator with the
+same instance name fails to start. Headless runs without `--sitl` use no sockets, so
+any number can run at once.
 
 `examples/sitl_client.c` is a complete SITL flight controller in C. It flies a
-circle and draws its setpoint, plan and trail:
+circle from where its vehicle starts and draws its setpoint, plan and trail. It
+takes `--instance`, `--socket-dir` and `--vehicle` like the simulator:
 
 ```sh
 ./build/release/multirotor-sim --sitl &
 ./build/release/sitl-example-client
+
+./build/release/multirotor-sim --sitl --instance pair --vehicles 2 &
+./build/release/sitl-example-client --instance pair --vehicle 0 &
+./build/release/sitl-example-client --instance pair --vehicle 1
 ```
 
 ### Recording video
@@ -104,7 +141,8 @@ shown, such as in this README. The animation above was made with:
 | `src/sim` | Vehicle model, dynamics and sensors. No clocks, threads or graphics. |
 | `src/runtime` | Runs the simulation against a clock (real time, or unpaced) and publishes snapshots |
 | `src/control` | The built-in flight controller, used without `--sitl` |
-| `src/ipc` | The SITL and visualization sockets |
+| `src/ipc` | The SITL and visualization sockets, and the directory that holds them |
+| `src/app` | Sets up the vehicles and their flight controllers from the options, for all programs |
 | `src/scene` | What is drawn for a snapshot, shared by the viewer and the recorder |
 | `src/platform`, `src/render` | Wayland window; Vulkan rendering to a window or offscreen |
 | `src/viewer`, `src/headless`, `src/recorder` | The programs |
@@ -120,10 +158,10 @@ frame. The simulation steps at 1 kHz.
 
 ## Protocols
 
-Both sockets are UNIX domain sockets of type `SOCK_SEQPACKET` in the socket
+All sockets are UNIX domain sockets of type `SOCK_SEQPACKET` in the socket
 directory, with their wire formats defined as C headers in `protocol/multirotor_sim`:
 
-- [SITL protocol](docs/sitl-protocol.md) (`sitl.sock`): the lockstep exchange of
-  sensor data and motor commands with the flight controller.
+- [SITL protocol](docs/sitl-protocol.md) (`vehicles/<name>.sock`): the lockstep
+  exchange of sensor data and motor commands with each vehicle's flight controller.
 - [Visualization protocol](docs/viz-protocol.md) (`viz.sock`): markers and paths,
   such as setpoints and planned trajectories, drawn in the viewer by any process.

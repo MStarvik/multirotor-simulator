@@ -7,7 +7,8 @@
 namespace sim::control {
 
 // A short scripted flight of stick inputs: take off, hover, fly forward, hover.
-// Used by the headless program and the recorder when no pilot is around.
+// Every vehicle flies it. Used by the headless program and the recorder when no
+// pilot is around.
 class DemoFlight {
  public:
   // Runs the simulation until `until` (simulated seconds), applying each scripted

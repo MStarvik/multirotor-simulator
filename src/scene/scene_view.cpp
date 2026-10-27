@@ -43,9 +43,9 @@ void SceneView::update_drawings(const ipc::VizServer& server) {
   drawing_vertices_ = make_drawings_mesh(scene).vertices;
 }
 
-render::FrameView SceneView::frame(const runtime::Snapshot& snapshot, std::uint32_t width,
-                                   std::uint32_t height) {
-  const VehicleState& vehicle = snapshot.vehicle;
+render::FrameView SceneView::frame(const runtime::Snapshot& snapshot, std::size_t follow,
+                                   std::uint32_t width, std::uint32_t height) {
+  const VehicleState& vehicle = snapshot.vehicles.at(follow).state;
   const double aspect = static_cast<double>(width) / static_cast<double>(height);
 
   Vec3 eye = vehicle.position + camera_offset_;
@@ -53,16 +53,17 @@ render::FrameView SceneView::frame(const runtime::Snapshot& snapshot, std::uint3
   const Mat4 view_projection = multiply(perspective(vertical_fov, aspect, near_plane, far_plane),
                                         look_at(eye, vehicle.position, {0.0, 0.0, -1.0}));
 
-  // The ground is finite, so keep it centered under the vehicle. Moving it in steps
-  // of two tiles keeps the checker pattern in place.
+  // The ground is finite, so keep it centered under the followed vehicle. Moving it
+  // in steps of two tiles keeps the checker pattern in place.
   const double ground_step = 2.0 * ground_tile_size;
   const Vec3 ground_offset{std::round(vehicle.position.x / ground_step) * ground_step,
                            std::round(vehicle.position.y / ground_step) * ground_step, 0.0};
 
-  items_ = {
-      render::DrawItem{.mesh = ground_mesh, .model = translation(ground_offset)},
-      render::DrawItem{.mesh = vehicle_mesh, .model = rigid_transform(vehicle.position, vehicle.attitude)},
-  };
+  items_.clear();
+  items_.push_back({.mesh = ground_mesh, .model = translation(ground_offset)});
+  for (const runtime::VehicleSnapshot& other : snapshot.vehicles) {
+    items_.push_back({.mesh = vehicle_mesh, .model = rigid_transform(other.state.position, other.state.attitude)});
+  }
   return {
       .view_projection = view_projection,
       .clear_color = sky_color,

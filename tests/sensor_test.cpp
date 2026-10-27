@@ -1,6 +1,8 @@
 // Checks of the simulated sensors against what real ones would report.
 
+#include <array>
 #include <cmath>
+#include <cstdint>
 #include <cstdio>
 #include <cstdlib>
 #include <print>
@@ -24,7 +26,8 @@ bool near(double a, double b, double tolerance) { return std::abs(a - b) <= tole
 
 // Averages the sensors over many steps of a vehicle sitting on the ground.
 void test_at_rest() {
-  sim::Simulation simulation{sim::make_multirotor({})};
+  sim::Simulation simulation;
+  simulation.add_vehicle(sim::make_multirotor({}));
   sim::Vec3 force_sum;
   sim::Vec3 rate_sum;
   double pressure_sum = 0.0;
@@ -32,7 +35,7 @@ void test_at_rest() {
   constexpr int steps = 2000;
   for (int i = 0; i < steps; ++i) {
     simulation.step();
-    const sim::SensorReadings& readings = simulation.sensors();
+    const sim::SensorReadings& readings = simulation.vehicles()[0].sensors();
     force_sum += readings.imu.specific_force;
     rate_sum += readings.imu.angular_velocity;
     if (readings.barometer_fresh) {
@@ -54,25 +57,31 @@ void test_at_rest() {
 
 // Pressure drops by about 12 Pa per meter near sea level.
 void test_barometer_altitude() {
-  sim::Simulation simulation{sim::make_multirotor({})};
   sim::VehicleState high_up;
   high_up.position.z = -100.0;
   high_up.on_ground = false;
-  simulation.reset(high_up);
-  check(near(simulation.sensors().barometer.pressure, 101325.0 - 1201.0, 10.0),
+  sim::Simulation simulation;
+  simulation.add_vehicle(sim::make_multirotor({}), high_up);
+  check(near(simulation.vehicles()[0].sensors().barometer.pressure, 101325.0 - 1201.0, 10.0),
         "barometer reads about 1200 Pa less at 100 m");
 }
 
 void test_determinism() {
+  // The accelerometer reading of each of two vehicles after a while.
   const auto run = [](std::uint64_t seed) {
-    sim::Simulation simulation{sim::make_multirotor({}), 0.001, seed};
+    sim::Simulation simulation{0.001, seed};
+    simulation.add_vehicle(sim::make_multirotor({}));
+    simulation.add_vehicle(sim::make_multirotor({}), {.position = {0.0, 2.0, 0.0}});
     for (int i = 0; i < 100; ++i) {
       simulation.step();
     }
-    return simulation.sensors().imu.specific_force.x;
+    return std::array{simulation.vehicles()[0].sensors().imu.specific_force.x,
+                      simulation.vehicles()[1].sensors().imu.specific_force.x};
   };
-  check(run(7) == run(7), "the same seed gives the same noise");
-  check(run(7) != run(8), "different seeds give different noise");
+  const auto first = run(7);
+  check(first == run(7), "the same seed gives the same noise");
+  check(first[0] != run(8)[0], "different seeds give different noise");
+  check(first[0] != first[1], "vehicles get different noise");
 }
 
 }  // namespace

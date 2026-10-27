@@ -10,6 +10,7 @@
 #include <span>
 #include <stop_token>
 #include <thread>
+#include <utility>
 #include <variant>
 #include <vector>
 
@@ -33,13 +34,18 @@ struct VizPath {
 
 using VizDrawing = std::variant<VizMarker, VizPath>;
 
+// Identifies a drawing: the connection that sent it, numbered from 1 in the order
+// clients connected, and the id that client chose for it.
+using VizDrawingKey = std::pair<std::uint64_t, std::uint32_t>;
+
 struct VizScene {
   std::uint64_t version = 0;  // Increases with every change.
-  std::map<std::uint32_t, VizDrawing> drawings;
+  std::map<VizDrawingKey, VizDrawing> drawings;
 };
 
 // Receives drawing commands (see multirotor_sim/viz.h) from any number of clients
-// on its own thread, so clients are never blocked by a slow or hidden viewer.
+// on its own thread, so clients are never blocked by a slow or hidden viewer. Each
+// client has its own drawing ids, and its drawings go away when it disconnects.
 class VizServer {
  public:
   explicit VizServer(std::filesystem::path socket_path);
@@ -53,7 +59,9 @@ class VizServer {
 
  private:
   void serve(const std::stop_token& stop);
-  void handle_message(std::span<const std::byte> message);
+  void handle_message(std::uint64_t client, std::span<const std::byte> message);
+  void remove_drawings_of(std::uint64_t client);
+  void changed();  // Call with mutex_ held.
 
   ListeningSocket listener_;
   mutable std::mutex mutex_;

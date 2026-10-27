@@ -93,6 +93,7 @@ target_include_directories(sim_protocol INTERFACE protocol)
 
 add_library(sim_ipc STATIC
   src/ipc/sitl_controller.cpp
+  src/ipc/socket_directory.cpp
   src/ipc/unix_socket.cpp
   src/ipc/viz_server.cpp)
 target_link_libraries(sim_ipc
@@ -100,11 +101,20 @@ target_link_libraries(sim_ipc
   PRIVATE sim_build_options)
 
 # -----------------------------------------------------------------------------
+# App: the vehicles and flight controllers the programs set up from the options
+# -----------------------------------------------------------------------------
+
+add_library(sim_app STATIC src/app/setup.cpp)
+target_link_libraries(sim_app
+  PUBLIC sim_ipc sim_runtime
+  PRIVATE sim_build_options sim_control)
+
+# -----------------------------------------------------------------------------
 # Headless executable: no window, no GPU
 # -----------------------------------------------------------------------------
 
 add_executable(multirotor-sim-headless src/headless/main.cpp)
-target_link_libraries(multirotor-sim-headless PRIVATE sim_build_options sim_control sim_ipc)
+target_link_libraries(multirotor-sim-headless PRIVATE sim_build_options sim_app sim_control sim_ipc)
 
 # -----------------------------------------------------------------------------
 # Example SITL flight controller, in C
@@ -121,18 +131,32 @@ enable_testing()
 add_executable(sensor-test tests/sensor_test.cpp)
 target_link_libraries(sensor-test PRIVATE sim_build_options sim_core)
 add_test(NAME sensors COMMAND sensor-test)
+add_executable(viz-test tests/viz_test.cpp)
+target_link_libraries(viz-test PRIVATE sim_build_options sim_ipc)
+add_test(NAME viz-drawings COMMAND viz-test ${CMAKE_CURRENT_BINARY_DIR}/viz-test-sockets)
 # The headless executable flies a scripted flight and fails if the state diverges.
 add_test(NAME headless-quadrotor COMMAND multirotor-sim-headless)
 add_test(NAME headless-hexarotor COMMAND multirotor-sim-headless --rotors 6)
 add_test(NAME headless-octorotor COMMAND multirotor-sim-headless --rotors 8 --mass 2.5)
+add_test(NAME headless-three-vehicles COMMAND multirotor-sim-headless --vehicles 3)
 # Lockstep over the SITL socket: the example client flies a circle and fails if it
 # tracks it poorly. The simulator runs in the background and ends the run.
 add_test(NAME sitl-lockstep
   COMMAND sh -c [["$1" --sitl --socket-dir "$3" --duration 20 >/dev/null & simulator=$!
-                  "$2" "$3"; client=$?
+                  "$2" --socket-dir "$3"; client=$?
                   wait $simulator && exit $client]]
     sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:sitl-example-client>
     ${CMAKE_CURRENT_BINARY_DIR}/sitl-test)
+# Two vehicles in lockstep, each with its own flight controller.
+add_test(NAME sitl-two-vehicles
+  COMMAND sh -c [["$1" --sitl --vehicle alpha --vehicle bravo --socket-dir "$3" --duration 20 >/dev/null &
+                  simulator=$!
+                  "$2" --socket-dir "$3" --vehicle alpha >/dev/null & alpha=$!
+                  "$2" --socket-dir "$3" --vehicle bravo; bravo=$?
+                  wait $alpha; alpha=$?
+                  wait $simulator && [ $alpha -eq 0 ] && exit $bravo]]
+    sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:sitl-example-client>
+    ${CMAKE_CURRENT_BINARY_DIR}/sitl-two-vehicles-test)
 set_tests_properties(sitl-lockstep PROPERTIES TIMEOUT 60)
 
 # -----------------------------------------------------------------------------
@@ -216,7 +240,7 @@ add_executable(multirotor-sim
   src/viewer/main.cpp
   src/viewer/viewer.cpp)
 target_link_libraries(multirotor-sim
-  PRIVATE sim_build_options sim_control sim_ipc sim_platform sim_render sim_scene)
+  PRIVATE sim_build_options sim_app sim_control sim_ipc sim_platform sim_render sim_scene)
 # Reuse sim_render's precompiled header instead of building a second copy.
 target_precompile_headers(multirotor-sim REUSE_FROM sim_render)
 
@@ -228,5 +252,5 @@ add_executable(multirotor-sim-record
   src/recorder/main.cpp
   src/recorder/video_encoder.cpp)
 target_link_libraries(multirotor-sim-record
-  PRIVATE sim_build_options sim_control sim_ipc sim_render sim_scene)
+  PRIVATE sim_build_options sim_app sim_control sim_ipc sim_render sim_scene)
 target_precompile_headers(multirotor-sim-record REUSE_FROM sim_render)

@@ -4,15 +4,13 @@
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
-#include <memory>
 #include <print>
 #include <stdexcept>
 #include <stop_token>
-#include <utility>
 
-#include "control/attitude_controller.hpp"
+#include "app/setup.hpp"
 #include "control/demo_flight.hpp"
-#include "ipc/sitl_controller.hpp"
+#include "ipc/socket_directory.hpp"
 #include "ipc/viz_server.hpp"
 #include "recorder/video_encoder.hpp"
 #include "render/offscreen_renderer.hpp"
@@ -21,7 +19,6 @@
 #include "runtime/sim_runner.hpp"
 #include "scene/scene_view.hpp"
 #include "sim/multirotor.hpp"
-#include "sim/simulation.hpp"
 
 // Records a flight to a video file, rendered offscreen: no window, compositor or
 // display needed. Frames are taken at fixed intervals of simulated time, so the
@@ -39,18 +36,11 @@ int record(const runtime::Options& options) {
   }
 
   const MultirotorModel model = make_multirotor(options.frame);
-  // Before the SITL socket, so that a flight controller that is already waiting
-  // finds the drawing socket as soon as the SITL socket accepts it.
-  const ipc::VizServer viz_server{options.socket_directory / "viz.sock"};
-  std::unique_ptr<runtime::FlightController> controller;
-  if (options.sitl) {
-    controller = std::make_unique<ipc::SitlController>(model, options.step_size,
-                                                       options.socket_directory / "sitl.sock");
-  } else {
-    controller = std::make_unique<control::AttitudeController>(model);
-  }
-  runtime::SimRunner runner{Simulation{model, options.step_size, options.seed}, std::move(controller),
-                            runtime::AsFastAsPossible{}};
+  const ipc::SocketDirectory sockets{options.socket_directory};
+  // Before the SITL sockets, so that a flight controller that is already waiting
+  // finds the drawing socket as soon as its SITL socket accepts it.
+  const ipc::VizServer viz_server{sockets.viz_socket()};
+  runtime::SimRunner runner = app::make_runner(options, model, &sockets, runtime::AsFastAsPossible{});
 
   scene::SceneView scene{model, options.camera_distance};
   const render::VulkanContext vulkan;
@@ -69,7 +59,8 @@ int record(const runtime::Options& options) {
       demo_flight.run_until(runner, time);
     }
     scene.update_drawings(viz_server);
-    encoder.write(renderer.render(scene.frame(runner.latest(), options.width, options.height)));
+    const runtime::Snapshot& snapshot = runner.latest();
+    encoder.write(renderer.render(scene.frame(snapshot, options.follow, options.width, options.height)));
   }
   encoder.finish();
 

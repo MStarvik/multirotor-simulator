@@ -30,9 +30,10 @@ bool send_message(int fd, const Message& message) {
 
 }  // namespace
 
-SitlController::SitlController(const MultirotorModel& model, double step_size,
+SitlController::SitlController(std::string vehicle_name, const MultirotorModel& model, double step_size,
                                std::filesystem::path socket_path)
-    : rotor_count_{model.rotors.size()},
+    : vehicle_name_{std::move(vehicle_name)},
+      rotor_count_{model.rotors.size()},
       step_ns_{static_cast<std::uint64_t>(std::llround(step_size * 1e9))},
       listener_{std::move(socket_path)} {
   hello_.header = {.type = SIM_SITL_HELLO, .version = SIM_SITL_PROTOCOL_VERSION};
@@ -48,7 +49,7 @@ SitlController::SitlController(const MultirotorModel& model, double step_size,
     hello_.rotors[i].spin = model.rotors[i].spin;
   }
 
-  std::println("Waiting for a flight controller on {}", listener_.path().native());
+  std::println("Vehicle {}: waiting for a flight controller on {}", vehicle_name_, listener_.path().native());
 }
 
 std::optional<MotorCommands> SitlController::update(const runtime::ControllerInput& input) {
@@ -83,7 +84,7 @@ bool SitlController::accept_client() {
     return false;
   }
   awaiting_answer_ = false;  // A new flight controller gets the current step again.
-  std::println("Flight controller connected");
+  std::println("Vehicle {}: flight controller connected", vehicle_name_);
   return true;
 }
 
@@ -160,7 +161,7 @@ std::optional<MotorCommands> SitlController::receive_actuators() {
 }
 
 void SitlController::disconnect(std::string_view reason) {
-  std::println(stderr, "Flight controller {}; waiting for it to reconnect", reason);
+  std::println(stderr, "Vehicle {}: flight controller {}; waiting for it to reconnect", vehicle_name_, reason);
   client_.reset();
   awaiting_answer_ = false;
 }

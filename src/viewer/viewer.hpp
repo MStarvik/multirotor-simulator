@@ -1,7 +1,9 @@
 #pragma once
 
 #include <chrono>
+#include <cstddef>
 #include <cstdint>
+#include <string>
 #include <vector>
 
 #include "ipc/viz_server.hpp"
@@ -16,12 +18,15 @@
 namespace sim::viewer {
 
 struct ViewerSettings {
+  std::vector<std::string> vehicle_names;  // In the simulation's order.
+  std::size_t follow = 0;          // The vehicle followed at first.
   std::uint32_t msaa_samples = 4;  // Rounded down to what the GPU supports; 1 disables MSAA.
   double camera_distance = 2.4;    // From the follow camera to the vehicle, m.
 };
 
 // Shows the latest simulation snapshot in a window, along with drawings received on
-// the viz socket, and turns keyboard input into commands for the simulation. It
+// the viz socket, and turns keyboard input into commands for the simulation. The
+// camera follows one vehicle at a time, which is also the one the keys fly. It
 // never touches the simulation directly, so it can't stall it: a slow or hidden
 // window only means fewer frames are shown.
 class Viewer {
@@ -50,10 +55,13 @@ class Viewer {
   };
 
   void handle_key(const platform::KeyEvent& event);
+  void follow_next_vehicle();
   [[nodiscard]] runtime::PilotInput pilot_input() const;
   void update_title(const runtime::Snapshot& snapshot);
 
   runtime::SimRunner& runner_;
+  std::vector<std::string> vehicle_names_;
+  std::size_t follow_;
   scene::SceneView scene_;
 
   // Declaration order matters: Vulkan objects must be destroyed before the
@@ -66,7 +74,7 @@ class Viewer {
   const ipc::VizServer& viz_server_;
 
   HeldKeys keys_;
-  runtime::PilotInput sent_input_;
+  runtime::PilotInput sent_input_;  // To the followed vehicle.
   bool paused_ = false;
   bool quit_requested_ = false;
   std::chrono::steady_clock::time_point next_title_update_;

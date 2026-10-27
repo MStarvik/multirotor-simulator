@@ -15,28 +15,39 @@ double validated_step_size(double step_size) {
   return step_size;
 }
 
+// SplitMix64's mixing function: nearby inputs give unrelated outputs, so vehicles'
+// noise doesn't correlate with their index or the seed.
+std::uint64_t mix(std::uint64_t x) {
+  x += 0x9e3779b97f4a7c15;
+  x = (x ^ (x >> 30)) * 0xbf58476d1ce4e5b9;
+  x = (x ^ (x >> 27)) * 0x94d049bb133111eb;
+  return x ^ (x >> 31);
+}
+
 }  // namespace
 
-Simulation::Simulation(MultirotorModel model, double step_size, std::uint64_t seed)
+Vehicle::Vehicle(MultirotorModel model, const VehicleState& initial_state, double step_size,
+                 std::uint64_t seed)
     : model_{std::move(model)},
-      step_size_{validated_step_size(step_size)},
+      initial_state_{initial_state},
+      step_size_{step_size},
       seed_{seed},
+      state_{initial_state},
       sensors_{model_.sensors, step_size_, seed_} {
   if (model_.rotors.empty() || model_.rotors.size() > max_rotors) {
     throw std::invalid_argument{"model must have between 1 and max_rotors rotors"};
   }
-  sensors_.sample(state_, steps_);
+  sensors_.sample(state_, 0);
 }
 
-void Simulation::reset(const VehicleState& initial_state) {
-  steps_ = 0;
-  state_ = initial_state;
+void Vehicle::reset() {
+  state_ = initial_state_;
   commands_ = {};
   sensors_.reset(seed_);
-  sensors_.sample(state_, steps_);
+  sensors_.sample(state_, 0);
 }
 
-void Simulation::step() {
+void Vehicle::step(std::uint64_t step) {
   const double dt = step_size_;
   const BodyParams& body = model_.body;
   const PropulsionParams& propulsion = model_.propulsion;
@@ -78,14 +89,13 @@ void Simulation::step() {
 
   resolve_ground_contact();
   state_.acceleration = (state_.velocity - previous_velocity) / dt;
-  ++steps_;
-  sensors_.sample(state_, steps_);
+  sensors_.sample(state_, step);
 }
 
 // A crude contact model: the ground is the plane z = 0, which the vehicle can't
 // sink into, and friction quickly stops it sliding or spinning while it touches.
 // Enough for taking off and landing, not for crashes.
-void Simulation::resolve_ground_contact() {
+void Vehicle::resolve_ground_contact() {
   state_.on_ground = state_.position.z >= 0.0;
   if (!state_.on_ground) {
     return;
@@ -98,6 +108,33 @@ void Simulation::resolve_ground_contact() {
   state_.velocity.x *= damping;
   state_.velocity.y *= damping;
   state_.angular_velocity *= damping;
+}
+
+Simulation::Simulation(double step_size, std::uint64_t seed)
+    : step_size_{validated_step_size(step_size)}, seed_{seed} {}
+
+std::size_t Simulation::add_vehicle(MultirotorModel model, const VehicleState& initial_state) {
+  const std::size_t index = vehicles_.size();
+  vehicles_.push_back(Vehicle{std::move(model), initial_state, step_size_, mix(seed_ ^ mix(index))});
+  return index;
+}
+
+void Simulation::set_motor_commands(std::size_t vehicle, const MotorCommands& commands) {
+  vehicles_.at(vehicle).commands_ = commands;
+}
+
+void Simulation::step() {
+  ++steps_;
+  for (Vehicle& vehicle : vehicles_) {
+    vehicle.step(steps_);
+  }
+}
+
+void Simulation::reset() {
+  steps_ = 0;
+  for (Vehicle& vehicle : vehicles_) {
+    vehicle.reset();
+  }
 }
 
 }  // namespace sim

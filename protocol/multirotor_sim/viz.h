@@ -10,10 +10,10 @@
 // Send with MSG_DONTWAIT and drop messages that would block, so that drawing can
 // never stall a flight controller (and through it, the simulation).
 //
-// Drawings are identified by a client-chosen id. Sending a drawing with an id that
-// is in use replaces it, so updating a setpoint is just sending it again. Drawings
-// stay until removed or cleared, also after their client disconnects; ids are
-// shared by all clients. Positions are in the world frame (NED), in meters.
+// Drawings are identified by a client-chosen id. Each connection has its own ids, so
+// clients can't clash. Sending a drawing with an id that is in use replaces it, so
+// updating a setpoint is just sending it again. Drawings stay until removed, cleared,
+// or their connection closes. Positions are in the world frame (NED), in meters.
 // Colors are linear RGB in [0, 1].
 
 #include <stddef.h>
@@ -25,8 +25,8 @@
 enum sim_viz_message_type : uint32_t {
   SIM_VIZ_MARKER = 1,  // struct sim_viz_marker
   SIM_VIZ_PATH = 2,    // struct sim_viz_path, followed by its points
-  SIM_VIZ_REMOVE = 3,  // struct sim_viz_header; removes the drawing with header.id
-  SIM_VIZ_CLEAR = 4,   // struct sim_viz_header; removes all drawings
+  SIM_VIZ_REMOVE = 3,  // struct sim_viz_header; removes this client's drawing with header.id
+  SIM_VIZ_CLEAR = 4,   // struct sim_viz_header; removes all of this client's drawings
 };
 
 struct sim_viz_header {
