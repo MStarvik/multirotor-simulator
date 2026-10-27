@@ -13,8 +13,10 @@ namespace sim::ipc {
 SimClient::SimClient(const std::filesystem::path& socket)
     : fd_{connect_to(socket)},
       buffer_(max_message_size),
-      roster_{std::make_shared<const runtime::Roster>()} {
+      roster_{std::make_shared<const runtime::Roster>()},
+      obstacles_{std::make_shared<const runtime::Obstacles>()} {
   snapshot_.roster = roster_;
+  snapshot_.obstacles = obstacles_;
   send(to_bytes(make_header(SIM_CTL_SUBSCRIBE)));
 }
 
@@ -76,6 +78,11 @@ void SimClient::handle_message(std::span<const std::byte> message) {
   switch (header.type) {
     case SIM_VIEW_VEHICLES:
       roster_ = decode_vehicles(message);
+      break;
+    case SIM_VIEW_OBSTACLES:
+      // Obstacles don't move with the vehicles, so they needn't wait for a state.
+      obstacles_ = decode_obstacles(message);
+      snapshot_.obstacles = obstacles_;
       break;
     case SIM_VIEW_STATE: {
       // States for vehicles that are already gone again are skipped.

@@ -48,10 +48,12 @@ class SimServer {
     UniqueFd fd;
     std::uint64_t id = 0;  // Numbered from 1 in the order clients connected.
     bool subscribed = false;
-    // Subscribers only: whether the current vehicles were sent, and the drawings that
-    // changed since they were last sent.
+    // Subscribers only: whether the current vehicles and obstacles were sent, and the
+    // drawings that changed since they were last sent.
     bool roster_sent = false;
     std::uint64_t sent_roster_version = 0;
+    bool obstacles_sent = false;
+    std::uint64_t sent_obstacles_version = 0;
     std::set<std::uint32_t> changed_drawings{};
     bool blocked = false;  // Its socket was full; wait until it has room.
   };
@@ -70,7 +72,7 @@ class SimServer {
   [[nodiscard]] runtime::VehicleSpec spawn_spec(const ::sim_ctl_spawn_vehicle& request) const;
   void send_replies();
   // Sends a subscriber what changed since it was last sent, while its socket has room.
-  void update(Client& client, const runtime::Roster& roster);
+  void update(Client& client, const runtime::Snapshot& snapshot);
   // Returns false, and marks the client blocked, if its socket is full.
   [[nodiscard]] bool send_to(Client& client, std::span<const std::byte> message);
   void disconnect(Client& client);

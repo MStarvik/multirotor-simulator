@@ -47,6 +47,7 @@ class SimClient {
   UniqueFd fd_;
   std::vector<std::byte> buffer_;
   std::shared_ptr<const runtime::Roster> roster_;  // The latest; the snapshot's may be older.
+  std::shared_ptr<const runtime::Obstacles> obstacles_;
   runtime::Snapshot snapshot_;
   VizScene drawings_;
 };

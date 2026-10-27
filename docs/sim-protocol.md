@@ -4,7 +4,7 @@ Defined in [`protocol/multirotor_sim/sim.h`](../protocol/multirotor_sim/sim.h). 
 process, including a flight controller, can use the simulator socket to draw in the
 viewers (position setpoints, planned trajectories, flown paths and so on) and to
 control the simulation (pause, reset, speed, stick inputs, adding and removing
-vehicles). Viewers use it to follow the simulation. `multirotor-sim-ctl` sends
+vehicles and obstacles). Viewers use it to follow the simulation. `multirotor-sim-ctl` sends
 requests from the command line.
 
 Frames and units follow the simulator's [conventions](../README.md#conventions):
@@ -81,6 +81,8 @@ bytes.
 | `SIM_CTL_PILOT_INPUT` | `sim_ctl_pilot_input` (80 bytes): `vehicle`, `sticks[4]` | Roll, pitch, yaw and throttle sticks in [−1, 1] for a vehicle's flight controller, until replaced. The built-in controller flies with them; an external one gets them in `sim_sitl_sensors.pilot`. |
 | `SIM_CTL_SPAWN_VEHICLE` | `sim_ctl_spawn_vehicle` (104 bytes): `name`, `controller`, `rotor_count`, `arm_length`, `mass`, `position[3]`, `yaw` | Adds a vehicle, which stays until removed (also after the client disconnects). See below. |
 | `SIM_CTL_REMOVE_VEHICLE` | `sim_ctl_remove_vehicle` (48 bytes): `name` | Removes a vehicle. If it had an external flight controller, that sees its SITL socket close. |
+| `SIM_CTL_SET_OBSTACLE` | `sim_ctl_set_obstacle` (128 bytes): a `sim_obstacle` | Adds an obstacle, or replaces the one with the same name, which is how to move one. See below. |
+| `SIM_CTL_REMOVE_OBSTACLE` | `sim_ctl_remove_obstacle` (48 bytes): `name` | Removes an obstacle |
 
 **Spawning.** A spawned vehicle is a symmetric frame like the simulator's own:
 `rotor_count` (even, 4 to 12), `arm_length` (m) and `mass` (kg) left at 0 take the
@@ -94,6 +96,15 @@ controller, flown with `SIM_CTL_PILOT_INPUT`, or `SIM_CONTROLLER_SITL` for an
 external flight controller on `<socket dir>/vehicles/<name>.sock`. That socket
 exists once the reply is sent. Like every SITL vehicle, it holds the whole
 simulation until its flight controller connects.
+
+**Obstacles** are boxes and upright cylinders that stay until removed (also after
+the client that added them disconnects). For now they are only shown; vehicles fly
+through them. A `sim_obstacle` (112 bytes) has a `name`, unique among obstacles and
+valid like a vehicle's; a `shape` (`SIM_OBSTACLE_BOX` or `SIM_OBSTACLE_CYLINDER`);
+the `position[3]` of the center of its base; its `size[3]`, which for a box is its
+length along its heading, width and height, and for a cylinder its diameter, an
+unused value and its height; a `yaw` (radians clockwise from north); and a linear
+RGB `color[3]`. There can be at most 1024.
 
 Example, pausing and checking the answer:
 
@@ -121,13 +132,16 @@ it needs to show the simulation:
   `controller`, `rotor_count`, `propeller_radius`, and each rotor's `position[3]`
   and `spin`). All vehicles, right after subscribing and whenever one comes or goes;
   `roster_version` increases with every change.
+- **`SIM_VIEW_OBSTACLES`**: `sim_view_obstacles` (32 bytes: `version`, `count`),
+  followed by `count` `sim_obstacle`. All obstacles, right after subscribing and
+  whenever one comes, goes or changes.
 - **Drawings**: everyone's, as `SIM_VIZ_MARKER`, `SIM_VIZ_PATH` and `SIM_VIZ_REMOVE`
   messages like the ones clients send, but with `header.id` chosen by the simulator,
   unique among all clients' drawings. Right after subscribing, every drawing there
   is; then whatever changes.
 
-The simulator never waits for a subscriber. It sends the latest vehicles and
-drawings when the subscriber's socket has room, so a slow subscriber skips changes
+The simulator never waits for a subscriber. It sends the latest vehicles, obstacles
+and drawings when the subscriber's socket has room, so a slow subscriber skips changes
 but catches up as soon as it reads again.
 
 Any client can ask for the state of the vehicles with `SIM_CTL_GET_STATE` (header

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <charconv>
 #include <cmath>
 #include <cstdio>
@@ -43,6 +44,15 @@ Commands:
       --yaw DEGREES       heading, clockwise from north (default: 0)
       --rotors N, --arm-length M, --mass KG
   remove NAME           remove a vehicle
+  obstacle NAME box|cylinder [options]
+                        add an obstacle, or move or change the one with that
+                        name; for now only shown, not collided with:
+      --at N,E[,D]        the center of its base, m (default: 0,0,0)
+      --size L,W,H        box: length along its heading, width and height;
+                          cylinder: diameter, ignored, height (default: 1,1,1)
+      --yaw DEGREES       heading, clockwise from north (default: 0)
+      --color R,G,B       linear RGB in [0, 1] (default: grey)
+  remove-obstacle NAME  remove an obstacle
 
 The simulator is the one named by --instance (default: default), or the one with
 its sockets in --socket-dir.
@@ -58,6 +68,24 @@ double parse_number(std::string_view what, std::string_view text) {
     throw std::invalid_argument{std::format("invalid value for {}: '{}'", what, text)};
   }
   return value;
+}
+
+// Comma-separated numbers, between min_count and max_count of them.
+std::vector<double> parse_list(std::string_view what, std::string_view text, std::size_t min_count,
+                               std::size_t max_count) {
+  std::vector<double> values;
+  for (std::size_t start = 0; start <= text.size();) {
+    const std::size_t comma = std::min(text.find(',', start), text.size());
+    values.push_back(parse_number(what, text.substr(start, comma - start)));
+    start = comma + 1;
+  }
+  if (values.size() < min_count || values.size() > max_count) {
+    throw std::invalid_argument{min_count == max_count
+                                    ? std::format("{} takes {} comma-separated numbers", what, min_count)
+                                    : std::format("{} takes {} to {} comma-separated numbers", what, min_count,
+                                                  max_count)};
+  }
+  return values;
 }
 
 void copy_name(std::string_view name, char (&to)[SIM_NAME_SIZE]) {
@@ -88,19 +116,8 @@ sim_ctl_spawn_vehicle parse_spawn(std::string_view name, std::span<char* const> 
     if (option == "--sitl") {
       request.controller = SIM_CONTROLLER_SITL;
     } else if (option == "--at") {
-      const std::string_view text = value();
-      std::size_t axis = 0;
-      for (std::size_t start = 0; start <= text.size(); ++axis) {
-        const std::size_t comma = std::min(text.find(',', start), text.size());
-        if (axis >= 3) {
-          throw std::invalid_argument{"--at takes two or three coordinates"};
-        }
-        request.position[axis] = parse_number(option, text.substr(start, comma - start));
-        start = comma + 1;
-      }
-      if (axis < 2) {
-        throw std::invalid_argument{"--at takes two or three coordinates"};
-      }
+      const auto position = parse_list(option, value(), 2, 3);
+      std::ranges::copy(position, request.position);
     } else if (option == "--yaw") {
       request.yaw = parse_number(option, value()) * std::numbers::pi / 180.0;
     } else if (option == "--rotors") {
@@ -111,6 +128,50 @@ sim_ctl_spawn_vehicle parse_spawn(std::string_view name, std::span<char* const> 
       request.mass = parse_number(option, value());
     } else {
       throw std::invalid_argument{std::format("unknown spawn option '{}'", option)};
+    }
+  }
+  return request;
+}
+
+// The obstacle command's arguments after the name.
+sim_ctl_set_obstacle parse_obstacle(std::string_view name, std::span<char* const> args) {
+  sim_ctl_set_obstacle request{};
+  request.header = header(SIM_CTL_SET_OBSTACLE);
+  sim_obstacle& obstacle = request.obstacle;
+  copy_name(name, obstacle.name);
+  const std::string_view shape = args.empty() ? "" : args.front();
+  if (shape == "box") {
+    obstacle.shape = SIM_OBSTACLE_BOX;
+  } else if (shape == "cylinder") {
+    obstacle.shape = SIM_OBSTACLE_CYLINDER;
+  } else {
+    throw std::invalid_argument{"an obstacle is a box or a cylinder"};
+  }
+  obstacle.size[0] = obstacle.size[1] = obstacle.size[2] = 1.0;
+  obstacle.color[0] = obstacle.color[1] = 0.55f;
+  obstacle.color[2] = 0.58f;
+
+  for (std::size_t i = 1; i < args.size(); ++i) {
+    const std::string_view option = args[i];
+    const auto value = [&] {
+      if (i + 1 >= args.size()) {
+        throw std::invalid_argument{std::format("{} needs a value", option)};
+      }
+      return std::string_view{args[++i]};
+    };
+    if (option == "--at") {
+      std::ranges::copy(parse_list(option, value(), 2, 3), obstacle.position);
+    } else if (option == "--size") {
+      std::ranges::copy(parse_list(option, value(), 3, 3), obstacle.size);
+    } else if (option == "--yaw") {
+      obstacle.yaw = parse_number(option, value()) * std::numbers::pi / 180.0;
+    } else if (option == "--color") {
+      const auto color = parse_list(option, value(), 3, 3);
+      for (std::size_t c = 0; c < 3; ++c) {
+        obstacle.color[c] = static_cast<float>(color[c]);
+      }
+    } else {
+      throw std::invalid_argument{std::format("unknown obstacle option '{}'", option)};
     }
   }
   return request;
@@ -152,6 +213,15 @@ std::vector<std::byte> make_request(std::string_view command, std::span<char* co
   if (command == "remove") {
     no_more(1);
     sim_ctl_remove_vehicle request{.header = header(SIM_CTL_REMOVE_VEHICLE), .name = {}};
+    copy_name(argument(0), request.name);
+    return bytes(request);
+  }
+  if (command == "obstacle") {
+    return bytes(parse_obstacle(argument(0), args.subspan(1)));
+  }
+  if (command == "remove-obstacle") {
+    no_more(1);
+    sim_ctl_remove_obstacle request{.header = header(SIM_CTL_REMOVE_OBSTACLE), .name = {}};
     copy_name(argument(0), request.name);
     return bytes(request);
   }

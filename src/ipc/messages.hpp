@@ -46,8 +46,9 @@ struct VizScene {
 
 // The largest message either end sends: a full path, or the most vehicles.
 inline constexpr std::size_t max_message_size =
-    std::max(sizeof(sim_viz_path) + SIM_VIZ_MAX_PATH_POINTS * sizeof(Float3),
-             sizeof(sim_view_vehicles) + SIM_MAX_VEHICLES * sizeof(sim_view_vehicle));
+    std::max({sizeof(sim_viz_path) + SIM_VIZ_MAX_PATH_POINTS * sizeof(Float3),
+              sizeof(sim_view_vehicles) + SIM_MAX_VEHICLES * sizeof(sim_view_vehicle),
+              sizeof(sim_view_obstacles) + SIM_MAX_OBSTACLES * sizeof(sim_obstacle)});
 
 template <typename T>
 [[nodiscard]] T read_as(std::span<const std::byte> bytes) {
@@ -80,8 +81,18 @@ void write_name(std::string_view name, char (&to)[SIM_NAME_SIZE]);
 [[nodiscard]] std::vector<std::byte> encode_vehicles(const runtime::Roster& roster);
 [[nodiscard]] std::shared_ptr<const runtime::Roster> decode_vehicles(std::span<const std::byte> message);
 
+// An obstacle, for SIM_CTL_SET_OBSTACLE and SIM_VIEW_OBSTACLES. Decoding doesn't
+// check the values; the runner does.
+[[nodiscard]] sim_obstacle encode_obstacle(const runtime::Obstacle& obstacle);
+[[nodiscard]] runtime::Obstacle decode_obstacle(const sim_obstacle& obstacle);
+
+// SIM_VIEW_OBSTACLES.
+[[nodiscard]] std::vector<std::byte> encode_obstacles(const runtime::Obstacles& obstacles);
+[[nodiscard]] std::shared_ptr<const runtime::Obstacles> decode_obstacles(std::span<const std::byte> message);
+
 // SIM_VIEW_STATE. Only the time, pause, real-time factor and the vehicles'
-// positions, attitudes and waiting survive the trip.
+// positions, attitudes and waiting survive the trip. Decoding leaves the
+// snapshot's obstacles alone.
 [[nodiscard]] std::vector<std::byte> encode_state(std::uint32_t request_id, const runtime::Snapshot& snapshot);
 // Into a snapshot of the roster with the same version; returns false, leaving the
 // snapshot alone, if the state is for another one.

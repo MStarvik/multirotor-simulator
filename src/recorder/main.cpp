@@ -65,7 +65,7 @@ int record(const runtime::Options& options) {
     }
     scene.update_drawings(server.drawings());
     const runtime::Snapshot& snapshot = runner.latest();
-    if (scene.update_vehicles(snapshot.roster)) {
+    if (scene.update_meshes(snapshot)) {
       renderer.set_meshes(scene.meshes());
     }
     const auto& vehicles = snapshot.roster->vehicles;

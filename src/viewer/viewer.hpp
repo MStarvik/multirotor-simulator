@@ -68,7 +68,8 @@ class Viewer {
   std::optional<ipc::SimClient> client_;
   std::chrono::steady_clock::time_point next_connect_attempt_;
   // Shown while not connected.
-  const runtime::Snapshot no_simulation_{.roster = std::make_shared<const runtime::Roster>()};
+  const runtime::Snapshot no_simulation_{.roster = std::make_shared<const runtime::Roster>(),
+                                         .obstacles = std::make_shared<const runtime::Obstacles>()};
 
   std::string follow_;  // The vehicle's name, which outlasts others coming and going.
   scene::SceneView scene_;

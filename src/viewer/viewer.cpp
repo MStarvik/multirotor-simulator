@@ -86,7 +86,7 @@ void Viewer::run() {
       sent_input_ = input;
     }
 
-    if (scene_.update_vehicles(snapshot.roster)) {
+    if (scene_.update_meshes(snapshot)) {
       renderer_.set_meshes(scene_.meshes());
     }
     if (client_) {

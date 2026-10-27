@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <format>
 #include <stdexcept>
 #include <thread>
@@ -41,6 +42,7 @@ SimRunner::SimRunner(double step_size, std::uint64_t seed, ControllerFactory mak
     : simulation_{step_size, seed},
       make_controller_{std::move(make_controller)},
       roster_{std::make_shared<const Roster>()},
+      obstacles_{std::make_shared<const Obstacles>()},
       clock_{clock} {
   publish();
 }
@@ -221,8 +223,44 @@ CommandResult SimRunner::apply(const Command& command) {
             remove(*index);
             return {};
           },
+          [&](const SetObstacle& c) -> CommandResult { return set_obstacle(c.obstacle); },
+          [&](const RemoveObstacle& c) -> CommandResult {
+            auto obstacles = std::make_shared<Obstacles>(*obstacles_);
+            if (std::erase_if(obstacles->obstacles, [&](const Obstacle& o) { return o.name == c.name; }) == 0) {
+              return {Status::not_found, std::format("there is no obstacle named '{}'", c.name)};
+            }
+            ++obstacles->version;
+            obstacles_ = std::move(obstacles);
+            return {};
+          },
       },
       command);
+}
+
+CommandResult SimRunner::set_obstacle(const Obstacle& obstacle) {
+  if (!is_valid_name(obstacle.name)) {
+    return {Status::invalid, std::format("invalid obstacle name '{}'; use up to {} letters, digits, '-', '_' and '.', "
+                                         "not starting with '.'",
+                                         obstacle.name, max_name_length)};
+  }
+  const Vec3& size = obstacle.size;
+  const bool positive = size.x > 0.0 && size.z > 0.0 && (obstacle.shape == ObstacleShape::cylinder || size.y > 0.0);
+  if (!is_finite(obstacle.position) || !is_finite(size) || !std::isfinite(obstacle.yaw) || !positive) {
+    return {Status::invalid, "an obstacle's position, size and yaw must be finite, and its size positive"};
+  }
+
+  auto obstacles = std::make_shared<Obstacles>(*obstacles_);
+  const auto existing = std::ranges::find(obstacles->obstacles, obstacle.name, &Obstacle::name);
+  if (existing != obstacles->obstacles.end()) {
+    *existing = obstacle;
+  } else if (obstacles->obstacles.size() >= max_obstacles) {
+    return {Status::invalid, std::format("there can be at most {} obstacles", max_obstacles)};
+  } else {
+    obstacles->obstacles.push_back(obstacle);
+  }
+  ++obstacles->version;
+  obstacles_ = std::move(obstacles);
+  return {};
 }
 
 std::optional<std::size_t> SimRunner::find_vehicle(const std::string& name) const {
@@ -268,6 +306,7 @@ bool SimRunner::step() {
 void SimRunner::publish() {
   next_snapshot_.time = simulation_.time();
   next_snapshot_.roster = roster_;
+  next_snapshot_.obstacles = obstacles_;
   next_snapshot_.real_time_factor = real_time_factor_;
   next_snapshot_.paused = paused_;
   for (std::size_t i = 0; i < vehicles_.size(); ++i) {

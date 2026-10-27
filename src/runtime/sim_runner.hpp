@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <functional>
@@ -31,6 +32,7 @@ inline constexpr std::size_t max_name_length = 32;
 [[nodiscard]] bool is_valid_name(std::string_view name);
 
 inline constexpr std::size_t max_vehicles = 256;
+inline constexpr std::size_t max_obstacles = 1024;
 
 // Everything needed to add a vehicle to the simulation.
 struct VehicleSpec {
@@ -47,6 +49,26 @@ struct Roster {
   std::vector<VehicleSpec> vehicles;
 };
 
+enum class ObstacleShape { box, cylinder };
+
+// Something in the way, which for now is only shown: vehicles fly through it.
+struct Obstacle {
+  std::string name;  // Unique among the obstacles.
+  ObstacleShape shape = ObstacleShape::box;
+  Vec3 position;  // The center of its base, world frame, m.
+  // Box: length along its heading, width, height. Cylinder: diameter, unused,
+  // height. m.
+  Vec3 size{1.0, 1.0, 1.0};
+  double yaw = 0.0;  // Heading, rad clockwise from north.
+  std::array<float, 3> color{0.55f, 0.55f, 0.58f};  // Linear RGB.
+};
+
+// Replaced, never changed, when obstacles come, go or move, so snapshots share it.
+struct Obstacles {
+  std::uint64_t version = 0;  // Increases with every change.
+  std::vector<Obstacle> obstacles;
+};
+
 struct VehicleSnapshot {
   VehicleState state;
   SensorReadings sensors;
@@ -58,6 +80,7 @@ struct Snapshot {
   double time = 0.0;  // Simulation time, s.
   std::shared_ptr<const Roster> roster;
   std::vector<VehicleSnapshot> vehicles{};  // In roster order.
+  std::shared_ptr<const Obstacles> obstacles;
   double real_time_factor = 0.0;  // Recent simulated seconds per wall-clock second.
   bool paused = false;
 };
@@ -82,7 +105,15 @@ struct SpawnVehicle {
 struct RemoveVehicle {
   std::string name;
 };
-using Command = std::variant<SetPilotInput, Reset, SetPaused, SetSpeed, SpawnVehicle, RemoveVehicle>;
+// Adds an obstacle, or replaces the one with the same name.
+struct SetObstacle {
+  Obstacle obstacle;
+};
+struct RemoveObstacle {
+  std::string name;
+};
+using Command = std::variant<SetPilotInput, Reset, SetPaused, SetSpeed, SpawnVehicle, RemoveVehicle, SetObstacle,
+                             RemoveObstacle>;
 
 enum class Status { ok, invalid, not_found, exists, unsupported, failed };
 
@@ -146,6 +177,7 @@ class SimRunner {
   // factory throws.
   void add(VehicleSpec spec);
   void remove(std::size_t index);
+  [[nodiscard]] CommandResult set_obstacle(const Obstacle& obstacle);
   void change_roster(const std::function<void(std::vector<VehicleSpec>&)>& change);
   [[nodiscard]] CommandResult apply(const Command& command);
   // Returns the vehicle's index in the roster, if there is one with that name.
@@ -157,6 +189,7 @@ class SimRunner {
   Simulation simulation_;
   ControllerFactory make_controller_;
   std::shared_ptr<const Roster> roster_;
+  std::shared_ptr<const Obstacles> obstacles_;
   std::vector<Vehicle> vehicles_;  // In roster order, which is also the simulation's.
   ClockPolicy clock_;
   bool paused_ = false;

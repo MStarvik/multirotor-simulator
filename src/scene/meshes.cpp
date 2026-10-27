@@ -72,6 +72,23 @@ void add_disc(Mesh& mesh, const Vec3& center, double radius, const Color& color)
   }
 }
 
+// An upright cylinder standing on base_center, with a top but no bottom.
+void add_cylinder(Mesh& mesh, const Vec3& base_center, double radius, double height, const Color& color) {
+  constexpr int segments = 32;
+  const Vec3 top{0.0, 0.0, -height};  // Up is -z.
+  for (int i = 0; i < segments; ++i) {
+    const double a0 = 2.0 * std::numbers::pi * i / segments;
+    const double a1 = 2.0 * std::numbers::pi * (i + 1) / segments;
+    const Vec3 r0 = radius * Vec3{std::cos(a0), std::sin(a0), 0.0};
+    const Vec3 r1 = radius * Vec3{std::cos(a1), std::sin(a1), 0.0};
+    // Flat shading per segment, facing out through its middle.
+    const double middle = 0.5 * (a0 + a1);
+    add_quad(mesh, base_center + r0, base_center + r1, base_center + r1 + top, base_center + r0 + top,
+             {std::cos(middle), std::sin(middle), 0.0}, color);
+  }
+  add_disc(mesh, base_center + top, radius, color);
+}
+
 // A square beam from a to b, without end caps.
 void add_beam(Mesh& mesh, const Vec3& a, const Vec3& b, double width, const Color& color) {
   const Vec3 along = b - a;
@@ -142,6 +159,23 @@ Mesh make_ground_mesh(double tile_size, int tiles_per_side) {
       const double y = origin + tile_size * j;
       add_quad(mesh, {x, y, 0.0}, {x + tile_size, y, 0.0}, {x + tile_size, y + tile_size, 0.0},
                {x, y + tile_size, 0.0}, up, ground_colors[static_cast<std::size_t>((i + j) % 2)]);
+    }
+  }
+  return mesh;
+}
+
+Mesh make_obstacles_mesh(const runtime::Obstacles& obstacles) {
+  Mesh mesh;
+  for (const runtime::Obstacle& obstacle : obstacles.obstacles) {
+    const Color color{obstacle.color[0], obstacle.color[1], obstacle.color[2]};
+    const Vec3& size = obstacle.size;
+    switch (obstacle.shape) {
+      case runtime::ObstacleShape::box:
+        add_box(mesh, obstacle.position + Vec3{0.0, 0.0, -0.5 * size.z}, 0.5 * size, obstacle.yaw, color);
+        break;
+      case runtime::ObstacleShape::cylinder:
+        add_cylinder(mesh, obstacle.position, 0.5 * size.x, size.z, color);
+        break;
     }
   }
   return mesh;

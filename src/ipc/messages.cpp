@@ -9,6 +9,7 @@ namespace {
 
 static_assert(runtime::max_vehicles == SIM_MAX_VEHICLES);
 static_assert(max_rotors == SIM_MAX_ROTORS);
+static_assert(runtime::max_obstacles == SIM_MAX_OBSTACLES);
 
 Float3 to_float3(const float (&v)[3]) { return {v[0], v[1], v[2]}; }
 
@@ -157,6 +158,59 @@ std::shared_ptr<const runtime::Roster> decode_vehicles(std::span<const std::byte
     roster->vehicles.push_back(std::move(spec));
   }
   return roster;
+}
+
+sim_obstacle encode_obstacle(const runtime::Obstacle& obstacle) {
+  sim_obstacle wire{};
+  write_name(obstacle.name, wire.name);
+  wire.shape = obstacle.shape == runtime::ObstacleShape::cylinder ? SIM_OBSTACLE_CYLINDER : SIM_OBSTACLE_BOX;
+  copy(obstacle.position, wire.position);
+  copy(obstacle.size, wire.size);
+  wire.yaw = obstacle.yaw;
+  copy(obstacle.color, wire.color);
+  return wire;
+}
+
+runtime::Obstacle decode_obstacle(const sim_obstacle& obstacle) {
+  expect(obstacle.shape == SIM_OBSTACLE_BOX || obstacle.shape == SIM_OBSTACLE_CYLINDER, "an unknown obstacle shape");
+  return {
+      .name = read_name(obstacle.name),
+      .shape = obstacle.shape == SIM_OBSTACLE_CYLINDER ? runtime::ObstacleShape::cylinder : runtime::ObstacleShape::box,
+      .position = to_vec3(obstacle.position),
+      .size = to_vec3(obstacle.size),
+      .yaw = obstacle.yaw,
+      .color = to_float3(obstacle.color),
+  };
+}
+
+std::vector<std::byte> encode_obstacles(const runtime::Obstacles& obstacles) {
+  const std::size_t count = std::min<std::size_t>(obstacles.obstacles.size(), SIM_MAX_OBSTACLES);
+  const sim_view_obstacles header{
+      .header = make_header(SIM_VIEW_OBSTACLES),
+      .version = obstacles.version,
+      .count = static_cast<std::uint32_t>(count),
+      .reserved = 0,
+  };
+  std::vector<std::byte> bytes = to_bytes(header);
+  for (std::size_t i = 0; i < count; ++i) {
+    const auto obstacle_bytes = to_bytes(encode_obstacle(obstacles.obstacles[i]));
+    bytes.insert(bytes.end(), obstacle_bytes.begin(), obstacle_bytes.end());
+  }
+  return bytes;
+}
+
+std::shared_ptr<const runtime::Obstacles> decode_obstacles(std::span<const std::byte> message) {
+  expect(message.size() >= sizeof(sim_view_obstacles), "an obstacle list too short for its header");
+  const auto header = read_as<sim_view_obstacles>(message);
+  expect(header.count <= SIM_MAX_OBSTACLES, "an obstacle list with too many obstacles");
+  const auto obstacles = trailing<sim_view_obstacles, sim_obstacle>(
+      message, header.count, "an obstacle list whose size doesn't match its count");
+  auto decoded = std::make_shared<runtime::Obstacles>();
+  decoded->version = header.version;
+  for (std::size_t i = 0; i < header.count; ++i) {
+    decoded->obstacles.push_back(decode_obstacle(read_as<sim_obstacle>(obstacles.subspan(i * sizeof(sim_obstacle)))));
+  }
+  return decoded;
 }
 
 std::vector<std::byte> encode_state(std::uint32_t request_id, const runtime::Snapshot& snapshot) {

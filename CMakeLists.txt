@@ -169,7 +169,8 @@ add_test(NAME sitl-lockstep
                   wait $simulator && exit $client]]
     sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:sitl-example-client>
     ${test_sockets}/sitl)
-# Vehicles spawned and removed while the simulator runs, through its socket.
+# Vehicles and obstacles added and removed while the simulator runs, through its
+# socket.
 add_test(NAME spawn-and-remove
   COMMAND sh -c [[tool=$2 sockets=$3
                   "$1" --realtime --duration 30 --socket-dir "$sockets" >/dev/null & simulator=$!
@@ -181,6 +182,11 @@ add_test(NAME spawn-and-remove
                   ctl remove bravo && [ ! -e "$sockets/vehicles/bravo.sock" ] &&
                   ctl remove alpha && ! ctl remove alpha 2>/dev/null &&
                   ! ctl spawn charlie --rotors 5 2>/dev/null &&
+                  ctl obstacle wall box --at 5,0 --size 0.3,6,3 --yaw 10 &&
+                  ctl obstacle pole cylinder --at 3,3 --size 0.4,0,4 --color 0.8,0.2,0.2 &&
+                  ! ctl obstacle bad box --size -1,1,1 2>/dev/null &&
+                  ctl obstacle wall box --at 6,0 --size 0.3,6,3 &&
+                  ctl remove-obstacle pole && ! ctl remove-obstacle pole 2>/dev/null &&
                   ctl speed 2 && ctl pause && ctl resume && ctl reset; result=$?
                   kill $simulator; wait $simulator; exit $result]]
     sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:multirotor-sim-ctl> ${test_sockets}/spawn)

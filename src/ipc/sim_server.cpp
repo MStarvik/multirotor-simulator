@@ -132,10 +132,10 @@ void SimServer::serve(const std::stop_token& stop) {
       send_replies();
     }
 
-    // Also every poll timeout, to notice vehicles coming or going.
-    const std::shared_ptr<const runtime::Roster> roster = snapshots_.latest().roster;
+    // Also every poll timeout, to notice vehicles and obstacles changing.
+    const runtime::Snapshot& snapshot = snapshots_.latest();
     for (Client& client : clients_) {
-      update(client, *roster);
+      update(client, snapshot);
     }
     std::erase_if(clients_, [](const Client& client) { return !client.fd; });
 
@@ -267,11 +267,28 @@ void SimServer::handle_request(Client& client, std::uint32_t type, std::span<con
                runtime::RemoveVehicle{.name = read_name(read_as<sim_ctl_remove_vehicle>(message).name)});
       }
       break;
+    case SIM_CTL_SET_OBSTACLE:
+      if (expect_size(sizeof(sim_ctl_set_obstacle))) {
+        try {
+          submit(client, header.id,
+                 runtime::SetObstacle{decode_obstacle(read_as<sim_ctl_set_obstacle>(message).obstacle)});
+        } catch (const std::invalid_argument& error) {
+          reject(error.what());
+        }
+      }
+      break;
+    case SIM_CTL_REMOVE_OBSTACLE:
+      if (expect_size(sizeof(sim_ctl_remove_obstacle))) {
+        submit(client, header.id,
+               runtime::RemoveObstacle{.name = read_name(read_as<sim_ctl_remove_obstacle>(message).name)});
+      }
+      break;
     case SIM_CTL_SUBSCRIBE:
       if (expect_size(sizeof(sim_header))) {
         // Everything is news to a new subscriber.
         client.subscribed = true;
         client.roster_sent = false;
+        client.obstacles_sent = false;
         {
           const std::lock_guard lock{mutex_};
           for (const auto& [id, drawing] : scene_.drawings) {
@@ -285,7 +302,7 @@ void SimServer::handle_request(Client& client, std::uint32_t type, std::span<con
       if (expect_size(sizeof(sim_header))) {
         // The vehicles first, so that the state can be matched to them.
         const runtime::Snapshot& snapshot = snapshots_.latest();
-        update(client, *snapshot.roster);
+        update(client, snapshot);
         if (!client.blocked && client.fd) {
           // Dropped if there's no room: the client asks again for a newer one anyway.
           [[maybe_unused]] const bool sent = send_to(client, encode_state(header.id, snapshot));
@@ -356,16 +373,25 @@ void SimServer::send_replies() {
   }
 }
 
-void SimServer::update(Client& client, const runtime::Roster& roster) {
+void SimServer::update(Client& client, const runtime::Snapshot& snapshot) {
   if (!client.subscribed || client.blocked || !client.fd) {
     return;
   }
+  const runtime::Roster& roster = *snapshot.roster;
   if (!client.roster_sent || client.sent_roster_version != roster.version) {
     if (!send_to(client, encode_vehicles(roster))) {
       return;
     }
     client.roster_sent = true;
     client.sent_roster_version = roster.version;
+  }
+  const runtime::Obstacles& obstacles = *snapshot.obstacles;
+  if (!client.obstacles_sent || client.sent_obstacles_version != obstacles.version) {
+    if (!send_to(client, encode_obstacles(obstacles))) {
+      return;
+    }
+    client.obstacles_sent = true;
+    client.sent_obstacles_version = obstacles.version;
   }
 
   // Whatever each changed drawing is now, which may be gone.

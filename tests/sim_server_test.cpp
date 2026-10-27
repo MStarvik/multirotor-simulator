@@ -173,6 +173,23 @@ void test_subscriber(const std::filesystem::path& socket) {
   check(receive_until(viewer, [&] { return viewer.drawings().drawings.empty(); }),
         "a subscriber sees drawings go when their client disconnects");
 
+  const UniqueFd builder = connect_to(socket);
+  sim_ctl_set_obstacle obstacle{.header = header(SIM_CTL_SET_OBSTACLE, 30), .obstacle = {}};
+  std::memcpy(obstacle.obstacle.name, "wall", 4);
+  obstacle.obstacle.shape = SIM_OBSTACLE_BOX;
+  obstacle.obstacle.size[0] = 0.3;
+  obstacle.obstacle.size[1] = 4.0;
+  obstacle.obstacle.size[2] = 2.0;
+  send_message(builder, obstacle);
+  check(receive_reply(builder).status == SIM_OK, "an obstacle is added");
+  check(receive_until(viewer, [&] { return viewer.snapshot().obstacles->obstacles.size() == 1; }),
+        "a subscriber gets the obstacles");
+  check(viewer.snapshot().obstacles->obstacles.at(0).size.y == 4.0, "the obstacles have their size");
+  obstacle.obstacle.size[2] = 0.0;
+  obstacle.header.id = 31;
+  send_message(builder, obstacle);
+  check(receive_reply(builder).status == SIM_INVALID, "an obstacle without height is refused");
+
   // A subscriber that never reads fills its socket. The others must carry on.
   sim::ipc::SimClient stuck{socket};
   const UniqueFd busy = connect_to(socket);

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "ipc/messages.hpp"
+#include "runtime/sim_runner.hpp"
 #include "render/scene.hpp"
 #include "sim/multirotor.hpp"
 
@@ -13,6 +14,9 @@ namespace sim::scene {
 
 // A checkered square in the plane z = 0, centered on the origin.
 [[nodiscard]] render::Mesh make_ground_mesh(double tile_size, int tiles_per_side);
+
+// World-space geometry for the obstacles.
+[[nodiscard]] render::Mesh make_obstacles_mesh(const runtime::Obstacles& obstacles);
 
 // World-space geometry for drawings received from other processes: markers become
 // diamonds with a line down to the ground, paths become chains of thin beams.

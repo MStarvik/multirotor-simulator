@@ -21,8 +21,9 @@
 // its receive buffer is full.
 //
 // Viewers subscribe (SIM_CTL_SUBSCRIBE) to be sent what they need to show the
-// simulation: the vehicles (SIM_VIEW_VEHICLES) whenever they change, and everyone's
-// drawings (SIM_VIZ_*, with ids chosen by the simulator) as they change. The
+// simulation: the vehicles (SIM_VIEW_VEHICLES) and obstacles (SIM_VIEW_OBSTACLES)
+// whenever they change, and everyone's drawings (SIM_VIZ_*, with ids chosen by the
+// simulator) as they change. The
 // simulator sends the latest of these when the subscriber's socket has room, so a
 // slow subscriber skips changes but always catches up. Any client can ask for the
 // state of the vehicles (SIM_CTL_GET_STATE), answered with SIM_VIEW_STATE.
@@ -40,6 +41,7 @@
 // of exactly this length has no terminating NUL.
 #define SIM_NAME_SIZE 32u
 #define SIM_MAX_VEHICLES 256u
+#define SIM_MAX_OBSTACLES 1024u
 #define SIM_MAX_ROTORS 12u
 
 enum sim_message_type : uint32_t {
@@ -58,6 +60,8 @@ enum sim_message_type : uint32_t {
   SIM_CTL_REMOVE_VEHICLE = 21,  // struct sim_ctl_remove_vehicle
   SIM_CTL_SUBSCRIBE = 22,       // struct sim_header
   SIM_CTL_GET_STATE = 23,       // struct sim_header; answered with SIM_VIEW_STATE
+  SIM_CTL_SET_OBSTACLE = 24,     // struct sim_ctl_set_obstacle
+  SIM_CTL_REMOVE_OBSTACLE = 25,  // struct sim_ctl_remove_obstacle
 
   // Simulator -> client.
   SIM_CTL_REPLY = 48,  // struct sim_ctl_reply
@@ -65,6 +69,7 @@ enum sim_message_type : uint32_t {
   // Simulator -> client, besides SIM_VIZ_* to subscribers.
   SIM_VIEW_VEHICLES = 64,  // struct sim_view_vehicles, followed by its vehicles
   SIM_VIEW_STATE = 65,     // struct sim_view_state, followed by its vehicles' states
+  SIM_VIEW_OBSTACLES = 66,  // struct sim_view_obstacles, followed by its obstacles
 };
 
 struct sim_header {
@@ -143,6 +148,37 @@ struct sim_ctl_remove_vehicle {
   char name[SIM_NAME_SIZE];
 };
 
+enum sim_obstacle_shape : uint32_t {
+  SIM_OBSTACLE_BOX = 0,
+  SIM_OBSTACLE_CYLINDER = 1,  // Upright.
+};
+
+struct sim_obstacle {
+  char name[SIM_NAME_SIZE];  // Unique among the obstacles; vehicles have their own names.
+  uint32_t shape;            // enum sim_obstacle_shape
+  uint32_t reserved;
+  double position[3];  // The center of its base, world frame, m.
+  // Box: length along its heading, width, height. Cylinder: diameter, unused,
+  // height. m, > 0.
+  double size[3];
+  double yaw;  // Heading, rad clockwise from north.
+  float color[3];
+  float reserved2;
+};
+
+// Adds an obstacle, or replaces the one with the same name, which is how to move
+// one. Obstacles stay until removed. For now they are only shown: vehicles fly
+// through them.
+struct sim_ctl_set_obstacle {
+  struct sim_header header;
+  struct sim_obstacle obstacle;
+};
+
+struct sim_ctl_remove_obstacle {
+  struct sim_header header;
+  char name[SIM_NAME_SIZE];
+};
+
 enum sim_status : int32_t {
   SIM_OK = 0,
   SIM_INVALID = 1,      // The request was malformed or had invalid values.
@@ -182,6 +218,15 @@ struct sim_view_vehicles {
   uint32_t reserved;
 };
 
+// Simulator -> subscriber: all obstacles, right after subscribing and whenever one
+// comes, goes or changes. Followed by count sim_obstacle.
+struct sim_view_obstacles {
+  struct sim_header header;  // header.id is 0.
+  uint64_t version;          // Increases with every change.
+  uint32_t count;            // At most SIM_MAX_OBSTACLES.
+  uint32_t reserved;
+};
+
 enum sim_view_vehicle_flags : uint32_t {
   SIM_VIEW_WAITING = 1u << 0,  // Waiting for its flight controller to answer.
 };
@@ -218,6 +263,10 @@ static_assert(sizeof(struct sim_ctl_pilot_input) == 80, "unexpected padding in s
 static_assert(sizeof(struct sim_ctl_spawn_vehicle) == 104, "unexpected padding in sim_ctl_spawn_vehicle");
 static_assert(sizeof(struct sim_ctl_remove_vehicle) == 48, "unexpected padding in sim_ctl_remove_vehicle");
 static_assert(sizeof(struct sim_ctl_reply) == 136, "unexpected padding in sim_ctl_reply");
+static_assert(sizeof(struct sim_obstacle) == 112, "unexpected padding in sim_obstacle");
+static_assert(sizeof(struct sim_ctl_set_obstacle) == 128, "unexpected padding in sim_ctl_set_obstacle");
+static_assert(sizeof(struct sim_ctl_remove_obstacle) == 48, "unexpected padding in sim_ctl_remove_obstacle");
+static_assert(sizeof(struct sim_view_obstacles) == 32, "unexpected padding in sim_view_obstacles");
 static_assert(sizeof(struct sim_view_vehicle) == 432, "unexpected padding in sim_view_vehicle");
 static_assert(sizeof(struct sim_view_vehicles) == 32, "unexpected padding in sim_view_vehicles");
 static_assert(sizeof(struct sim_view_vehicle_state) == 64, "unexpected padding in sim_view_vehicle_state");

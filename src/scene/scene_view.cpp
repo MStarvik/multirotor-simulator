@@ -12,7 +12,8 @@ namespace {
 
 // Indices into meshes_.
 constexpr std::size_t ground_mesh = 0;
-constexpr std::size_t first_vehicle_mesh = 1;
+constexpr std::size_t obstacles_mesh = 1;
+constexpr std::size_t first_vehicle_mesh = 2;
 
 constexpr double ground_tile_size = 1.0;  // m
 // Large enough that the edge is always past the fog in mesh.frag, which hides it.
@@ -33,17 +34,23 @@ constexpr std::array sky_color{0.42f, 0.60f, 0.85f, 1.0f};  // Also the fog colo
 }  // namespace
 
 SceneView::SceneView(const CameraSettings& camera)
-    : camera_{camera}, meshes_{make_ground_mesh(ground_tile_size, ground_tiles_per_side)} {}
+    : camera_{camera}, meshes_{make_ground_mesh(ground_tile_size, ground_tiles_per_side), render::Mesh{}} {}
 
-bool SceneView::update_vehicles(const std::shared_ptr<const runtime::Roster>& roster) {
-  // By identity, not version, since the roster may come from another simulator.
-  if (roster == roster_) {
+bool SceneView::update_meshes(const runtime::Snapshot& snapshot) {
+  // By identity, not version, since they may come from another simulator.
+  if (snapshot.roster == roster_ && snapshot.obstacles == obstacles_) {
     return false;
   }
-  roster_ = roster;
-  meshes_.resize(first_vehicle_mesh);
-  for (const runtime::VehicleSpec& vehicle : roster->vehicles) {
-    meshes_.push_back(make_multirotor_mesh(vehicle.model));
+  if (snapshot.obstacles != obstacles_) {
+    obstacles_ = snapshot.obstacles;
+    meshes_[obstacles_mesh] = obstacles_ ? make_obstacles_mesh(*obstacles_) : render::Mesh{};
+  }
+  if (snapshot.roster != roster_) {
+    roster_ = snapshot.roster;
+    meshes_.resize(first_vehicle_mesh);
+    for (const runtime::VehicleSpec& vehicle : roster_->vehicles) {
+      meshes_.push_back(make_multirotor_mesh(vehicle.model));
+    }
   }
   return true;
 }
@@ -105,6 +112,9 @@ render::FrameView SceneView::frame(const runtime::Snapshot& snapshot, std::size_
 
   items_.clear();
   items_.push_back({.mesh = ground_mesh, .model = translation(ground_offset)});
+  if (!meshes_[obstacles_mesh].vertices.empty()) {
+    items_.push_back({.mesh = obstacles_mesh, .model = translation({})});
+  }
   // Only vehicles with meshes, in case update_vehicles() wasn't called.
   const std::size_t vehicles = std::min(snapshot.vehicles.size(), meshes_.size() - first_vehicle_mesh);
   for (std::size_t i = 0; i < vehicles; ++i) {

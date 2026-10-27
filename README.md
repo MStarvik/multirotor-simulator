@@ -59,9 +59,11 @@ Builds go to `build/<preset>/`. Debug builds enable the Vulkan validation layers
 # Three vehicles, each waiting for its own flight controller
 ./build/release/multirotor-sim --sitl --vehicle alpha --vehicle bravo --vehicle charlie
 
-# Control a running simulator: add or remove vehicles, pause, change speed
+# Control a running simulator: add or remove vehicles and obstacles, pause, change speed
 ./build/release/multirotor-sim-ctl spawn delta --at 0,6 --rotors 6
 ./build/release/multirotor-sim-ctl remove delta
+./build/release/multirotor-sim-ctl obstacle wall box --at 5,0 --size 0.3,6,3
+./build/release/multirotor-sim-ctl obstacle pole cylinder --at 3,3 --size 0.4,0,4
 ./build/release/multirotor-sim-ctl pause
 ```
 
@@ -100,7 +102,7 @@ interrupted. `multirotor-sim-viewer` attaches to the simulator named by
 Vehicles start on the ground in a row heading east from the origin, a couple of
 meters apart, and more can be added and removed while the simulator runs, with
 `multirotor-sim-ctl` or any client of the simulator socket. They don't collide with
-each other. With `--sitl`, each waits for its own flight controller, and the
+each other, nor yet with obstacles, which are only shown for now. With `--sitl`, each waits for its own flight controller, and the
 simulation steps once all of them have answered, so it doesn't start until every
 one has connected.
 

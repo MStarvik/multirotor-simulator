@@ -29,10 +29,10 @@ class SceneView {
   // The meshes to create the renderer with; frames refer to them by index.
   [[nodiscard]] std::span<const render::Mesh> meshes() const { return meshes_; }
 
-  // Builds meshes for the vehicles if they came or went. Returns whether meshes()
-  // changed, so that the renderer needs them again. Call with each snapshot's roster
-  // before frame().
-  [[nodiscard]] bool update_vehicles(const std::shared_ptr<const runtime::Roster>& roster);
+  // Builds meshes for the vehicles and obstacles if they changed. Returns whether
+  // meshes() changed, so that the renderer needs them again. Call with each
+  // snapshot before frame().
+  [[nodiscard]] bool update_meshes(const runtime::Snapshot& snapshot);
 
   // Rebuilds the drawings' geometry if they changed since the last call. After
   // switching to drawings from another source, call forget_drawings() first.
@@ -51,8 +51,11 @@ class SceneView {
 
  private:
   CameraSettings camera_;
-  std::vector<render::Mesh> meshes_;  // The ground, then each vehicle in roster order.
-  std::shared_ptr<const runtime::Roster> roster_;  // The one meshes_ were built for.
+  // The ground, the obstacles, then each vehicle in roster order.
+  std::vector<render::Mesh> meshes_;
+  // What meshes_ were built for.
+  std::shared_ptr<const runtime::Roster> roster_;
+  std::shared_ptr<const runtime::Obstacles> obstacles_;
   bool have_drawings_ = false;
   std::uint64_t drawings_version_ = 0;
   std::vector<render::Vertex> drawing_vertices_;
