@@ -1,6 +1,7 @@
 #include "runtime/options.hpp"
 
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <cstdlib>
 #include <format>
@@ -44,8 +45,16 @@ Simulation:
 
 Viewer and recorder:
   --msaa N            anti-aliasing samples per pixel: 1 (off), 2, 4 or 8 (default: 4)
-  --camera-distance M distance from the follow camera to the vehicle (default: 2.4)
   --follow NAME       the vehicle the camera follows (default: the first)
+  --camera MODE       how it follows: follow (from the south-west, above), chase
+                      (from behind), overhead, or fixed (from --camera-position)
+                      (default: follow)
+  --camera-distance M distance from the camera to the vehicle (default: 2.4)
+  --camera-position N,E,D  where the fixed camera is, m (default: -8,-8,-3)
+  --no-viewer         simulator: don't open a viewer; attach one later with
+                      multirotor-sim-viewer
+  --exit-with-simulator  viewer: exit when the simulator does, instead of
+                      waiting for the next one
 
 Recorder:
   --output FILE       video to write (required): .webm for a VP9 video, or .avif
@@ -78,7 +87,48 @@ T parse_number(std::string_view option, std::string_view text) {
   return value;
 }
 
+CameraMode parse_camera_mode(std::string_view text) {
+  if (text == "follow") {
+    return CameraMode::follow;
+  }
+  if (text == "chase") {
+    return CameraMode::chase;
+  }
+  if (text == "overhead") {
+    return CameraMode::overhead;
+  }
+  if (text == "fixed") {
+    return CameraMode::fixed;
+  }
+  throw std::invalid_argument{std::format("--camera must be follow, chase, overhead or fixed, not '{}'", text)};
+}
+
+// N,E,D in meters.
+Vec3 parse_position(std::string_view option, std::string_view text) {
+  std::array<double, 3> coordinates{};
+  std::size_t start = 0;
+  for (std::size_t i = 0; i < coordinates.size(); ++i) {
+    const std::size_t comma = i + 1 < coordinates.size() ? text.find(',', start) : text.size();
+    if (comma == std::string_view::npos) {
+      throw std::invalid_argument{std::format("{} takes three coordinates, N,E,D", option)};
+    }
+    coordinates[i] = parse_number<double>(option, text.substr(start, comma - start));
+    start = comma + 1;
+  }
+  return {coordinates[0], coordinates[1], coordinates[2]};
+}
+
 }  // namespace
+
+std::string_view to_string(CameraMode mode) {
+  switch (mode) {
+    case CameraMode::follow: return "follow";
+    case CameraMode::chase: return "chase";
+    case CameraMode::overhead: return "overhead";
+    case CameraMode::fixed: return "fixed";
+  }
+  return "follow";
+}
 
 // $XDG_RUNTIME_DIR is private to the user and cleaned up on logout, which is what
 // sockets want. Fall back to a per-user directory under /tmp.
@@ -141,6 +191,14 @@ std::optional<Options> parse_options(std::span<char* const> args) {
       options.camera_distance = parse_number<double>(option, value());
     } else if (option == "--follow") {
       options.follow = value();
+    } else if (option == "--camera") {
+      options.camera = parse_camera_mode(value());
+    } else if (option == "--camera-position") {
+      options.camera_position = parse_position(option, value());
+    } else if (option == "--no-viewer") {
+      options.no_viewer = true;
+    } else if (option == "--exit-with-simulator") {
+      options.exit_with_simulator = true;
     } else if (option == "--output") {
       options.output = value();
     } else if (option == "--fps") {

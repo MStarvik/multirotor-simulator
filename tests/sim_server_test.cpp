@@ -1,5 +1,6 @@
 // Checks the simulator socket: that drawings belong to the connection that sent
-// them, and that requests are applied and answered.
+// them, that requests are applied and answered, and that subscribers are kept up to
+// date without a slow one holding anything up.
 //
 // Usage: sim-server-test <directory for the socket>
 
@@ -18,10 +19,10 @@
 
 #include <poll.h>
 #include <sys/socket.h>
-#include <sys/un.h>
 
 #include <multirotor_sim/sim.h>
 
+#include "ipc/sim_client.hpp"
 #include "ipc/sim_server.hpp"
 #include "ipc/unix_socket.hpp"
 #include "runtime/sim_runner.hpp"
@@ -29,6 +30,7 @@
 
 namespace {
 
+using sim::ipc::connect_to;
 using sim::ipc::UniqueFd;
 
 int failures = 0;
@@ -49,17 +51,6 @@ class IdleController final : public sim::runtime::FlightController {
     return sim::MotorCommands{};
   }
 };
-
-UniqueFd connect_to(const std::filesystem::path& path) {
-  UniqueFd fd{::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0)};
-  sockaddr_un address{};
-  address.sun_family = AF_UNIX;
-  std::strncpy(address.sun_path, path.c_str(), sizeof address.sun_path - 1);
-  if (!fd || ::connect(fd.get(), reinterpret_cast<const sockaddr*>(&address), sizeof address) != 0) {
-    throw std::runtime_error{"could not connect to the simulator socket"};
-  }
-  return fd;
-}
 
 template <typename Message>
 void send_message(const UniqueFd& client, const Message& message) {
@@ -149,6 +140,52 @@ void test_requests(const std::filesystem::path& socket) {
         "a request with id 0 isn't answered");
 }
 
+// Receives on the client until the condition holds, or two seconds pass.
+template <typename Condition>
+bool receive_until(sim::ipc::SimClient& client, Condition condition) {
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+  while (std::chrono::steady_clock::now() < deadline) {
+    client.request_state();
+    if (!client.receive()) {
+      return false;
+    }
+    if (condition()) {
+      return true;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds{5});
+  }
+  return false;
+}
+
+void test_subscriber(const std::filesystem::path& socket) {
+  sim::ipc::SimClient viewer{socket};
+  check(receive_until(viewer, [&] { return viewer.snapshot().vehicles.size() == 1; }),
+        "a subscriber gets the vehicles and their state");
+  check(viewer.snapshot().roster->vehicles.at(0).name == "alpha", "the vehicles have their names");
+  check(viewer.snapshot().roster->vehicles.at(0).model.rotors.size() == 4, "the vehicles have their rotors");
+
+  UniqueFd drawer = connect_to(socket);
+  send_marker(drawer, 1);
+  send_marker(drawer, 2);
+  check(receive_until(viewer, [&] { return viewer.drawings().drawings.size() == 2; }),
+        "a subscriber gets other clients' drawings");
+  drawer.reset();
+  check(receive_until(viewer, [&] { return viewer.drawings().drawings.empty(); }),
+        "a subscriber sees drawings go when their client disconnects");
+
+  // A subscriber that never reads fills its socket. The others must carry on.
+  sim::ipc::SimClient stuck{socket};
+  const UniqueFd busy = connect_to(socket);
+  for (std::uint32_t i = 0; i < 2000; ++i) {
+    send_marker(busy, i);
+  }
+  const UniqueFd requester = connect_to(socket);
+  send_message(requester, header(SIM_CTL_RESET, 20));
+  check(receive_reply(requester).header.id == 20, "a stuck subscriber doesn't hold up requests");
+  check(receive_until(viewer, [&] { return viewer.drawings().drawings.size() == 2000; }),
+        "a stuck subscriber doesn't hold up the others");
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -165,6 +202,7 @@ int main(int argc, char** argv) {
   {
     const std::jthread simulation{[&runner](std::stop_token stop) { runner.run(stop); }};
     test_drawings(server, socket);
+    test_subscriber(socket);
     test_requests(socket);
   }
   check(runner.latest().paused, "the simulation was paused");

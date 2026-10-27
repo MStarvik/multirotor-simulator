@@ -18,10 +18,12 @@ constexpr double ground_tile_size = 1.0;  // m
 // Large enough that the edge is always past the fog in mesh.frag, which hides it.
 constexpr int ground_tiles_per_side = 240;
 
-// The camera looks at the vehicle from a fixed direction: south-west of it and
-// above (the world frame is NED, so up is -z).
-constexpr Vec3 camera_direction{-2.0, -0.9, -0.9};
-constexpr double min_camera_height = 0.3;  // m
+// The follow camera looks at the vehicle from a fixed direction: south-west of it
+// and above (the world frame is NED, so up is -z).
+constexpr Vec3 follow_direction{-2.0, -0.9, -0.9};
+constexpr double chase_elevation = 0.35;         // rad above the horizon, behind the vehicle.
+constexpr double overhead_height_factor = 4.0;  // Times the camera distance.
+constexpr double min_camera_height = 0.3;       // m
 constexpr double vertical_fov = std::numbers::pi / 3.0;
 constexpr double near_plane = 0.05;  // m
 constexpr double far_plane = 200.0;  // m
@@ -30,40 +32,70 @@ constexpr std::array sky_color{0.42f, 0.60f, 0.85f, 1.0f};  // Also the fog colo
 
 }  // namespace
 
-SceneView::SceneView(double camera_distance)
-    : meshes_{make_ground_mesh(ground_tile_size, ground_tiles_per_side)},
-      camera_offset_{camera_distance * normalized(camera_direction)} {}
+SceneView::SceneView(const CameraSettings& camera)
+    : camera_{camera}, meshes_{make_ground_mesh(ground_tile_size, ground_tiles_per_side)} {}
 
-bool SceneView::update_vehicles(const runtime::Roster& roster) {
-  if (roster.version == roster_version_) {
+bool SceneView::update_vehicles(const std::shared_ptr<const runtime::Roster>& roster) {
+  // By identity, not version, since the roster may come from another simulator.
+  if (roster == roster_) {
     return false;
   }
-  roster_version_ = roster.version;
+  roster_ = roster;
   meshes_.resize(first_vehicle_mesh);
-  for (const runtime::VehicleSpec& vehicle : roster.vehicles) {
+  for (const runtime::VehicleSpec& vehicle : roster->vehicles) {
     meshes_.push_back(make_multirotor_mesh(vehicle.model));
   }
   return true;
 }
 
-void SceneView::update_drawings(const ipc::SimServer& server) {
-  if (server.drawings_version() == drawings_version_) {
+void SceneView::update_drawings(const ipc::VizScene& drawings) {
+  if (have_drawings_ && drawings.version == drawings_version_) {
     return;
   }
-  const ipc::VizScene scene = server.drawings();
-  drawings_version_ = scene.version;
-  drawing_vertices_ = make_drawings_mesh(scene).vertices;
+  have_drawings_ = true;
+  drawings_version_ = drawings.version;
+  drawing_vertices_ = make_drawings_mesh(drawings).vertices;
+}
+
+void SceneView::forget_drawings() {
+  have_drawings_ = false;
+  drawing_vertices_.clear();
 }
 
 render::FrameView SceneView::frame(const runtime::Snapshot& snapshot, std::size_t follow,
                                    std::uint32_t width, std::uint32_t height) {
-  const Vec3 target = follow < snapshot.vehicles.size() ? snapshot.vehicles[follow].state.position : Vec3{};
-  const double aspect = static_cast<double>(width) / static_cast<double>(height);
+  const VehicleState* vehicle = follow < snapshot.vehicles.size() ? &snapshot.vehicles[follow].state : nullptr;
+  const Vec3 target = vehicle != nullptr ? vehicle->position : Vec3{};
+  const double distance = camera_.distance;
 
-  Vec3 eye = target + camera_offset_;
-  eye.z = std::min(eye.z, -min_camera_height);
-  const Mat4 view_projection = multiply(perspective(vertical_fov, aspect, near_plane, far_plane),
-                                        look_at(eye, target, {0.0, 0.0, -1.0}));
+  Vec3 eye;
+  Vec3 up{0.0, 0.0, -1.0};
+  switch (camera_.mode) {
+    case runtime::CameraMode::follow:
+      eye = target + distance * normalized(follow_direction);
+      break;
+    case runtime::CameraMode::chase: {
+      // Turns with the vehicle's heading, but not with its roll and pitch.
+      const double yaw = vehicle != nullptr ? to_euler(vehicle->attitude).yaw : 0.0;
+      eye = target + distance * Vec3{-std::cos(yaw) * std::cos(chase_elevation),
+                                     -std::sin(yaw) * std::cos(chase_elevation), -std::sin(chase_elevation)};
+      break;
+    }
+    case runtime::CameraMode::overhead:
+      eye = target + Vec3{0.0, 0.0, -overhead_height_factor * distance};
+      up = {1.0, 0.0, 0.0};  // North at the top of the image.
+      break;
+    case runtime::CameraMode::fixed:
+      eye = camera_.position;
+      break;
+  }
+  if (camera_.mode != runtime::CameraMode::fixed) {
+    eye.z = std::min(eye.z, -min_camera_height);
+  }
+
+  const double aspect = static_cast<double>(width) / static_cast<double>(height);
+  const Mat4 view_projection =
+      multiply(perspective(vertical_fov, aspect, near_plane, far_plane), look_at(eye, target, up));
 
   // The ground is finite, so keep it centered under the followed vehicle. Moving it
   // in steps of two tiles keeps the checker pattern in place.

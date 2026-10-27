@@ -4,6 +4,7 @@
 #include <format>
 #include <stdexcept>
 #include <string>
+#include <system_error>
 #include <utility>
 
 #include <xkbcommon/xkbcommon-keysyms.h>
@@ -13,6 +14,17 @@ namespace sim::viewer {
 namespace {
 
 constexpr auto title_interval = std::chrono::milliseconds{250};
+constexpr auto connect_interval = std::chrono::seconds{1};
+
+runtime::CameraMode next_camera_mode(runtime::CameraMode mode) {
+  switch (mode) {
+    case runtime::CameraMode::follow: return runtime::CameraMode::chase;
+    case runtime::CameraMode::chase: return runtime::CameraMode::overhead;
+    case runtime::CameraMode::overhead: return runtime::CameraMode::fixed;
+    case runtime::CameraMode::fixed: return runtime::CameraMode::follow;
+  }
+  return runtime::CameraMode::follow;
+}
 
 vk::Extent2D to_vk(platform::Extent extent) {
   return {.width = extent.width, .height = extent.height};
@@ -20,15 +32,18 @@ vk::Extent2D to_vk(platform::Extent extent) {
 
 }  // namespace
 
-Viewer::Viewer(runtime::SimRunner& runner, const ipc::SimServer& server, const ViewerSettings& settings)
-    : runner_{runner},
+Viewer::Viewer(const ViewerSettings& settings)
+    : settings_{settings},
       follow_{settings.follow},
-      scene_{settings.camera_distance},
+      scene_{settings.camera},
       window_{display_, "Multirotor Simulator", "multirotor-sim"},
       vulkan_{display_.native(), window_.surface()},
-      renderer_{vulkan_, to_vk(window_.framebuffer_extent()), settings.msaa_samples, scene_.meshes()},
-      server_{server} {
+      renderer_{vulkan_, to_vk(window_.framebuffer_extent()), settings.msaa_samples, scene_.meshes()} {
   window_.apply_scale();
+  connect();
+  if (!client_ && settings_.exit_with_simulator) {
+    throw std::runtime_error{std::format("no simulator at {}", settings_.socket.native())};
+  }
 
   if (auto* seat = display_.seat()) {
     seat->on_key = [this](const platform::KeyEvent& event) { handle_key(event); };
@@ -47,26 +62,55 @@ void Viewer::run() {
       window_.apply_scale();
     }
 
-    const runtime::Snapshot& snapshot = runner_.latest();
+    // The state asked for last frame, which arrived meanwhile. A frame behind, but
+    // waiting for it would hold up the frame.
+    if (client_ && !client_->receive()) {
+      client_.reset();
+      if (settings_.exit_with_simulator) {
+        return;
+      }
+      scene_.forget_drawings();
+    }
+    connect();
+    if (client_) {
+      client_->request_state();
+    }
+
+    const runtime::Snapshot& snapshot = client_ ? client_->snapshot() : no_simulation_;
     if (std::exchange(follow_next_, false)) {
       follow_next_vehicle(*snapshot.roster);
     }
     const std::size_t follow = followed(*snapshot.roster);
-    if (const runtime::PilotInput input = pilot_input(); input != sent_input_ && !follow_.empty()) {
-      runner_.push(runtime::SetPilotInput{.vehicle = follow_, .input = input});
+    if (const runtime::PilotInput input = pilot_input(); input != sent_input_ && client_ && !follow_.empty()) {
+      client_->set_pilot_input(follow_, input);
       sent_input_ = input;
     }
 
-    if (scene_.update_vehicles(*snapshot.roster)) {
+    if (scene_.update_vehicles(snapshot.roster)) {
       renderer_.set_meshes(scene_.meshes());
     }
-    scene_.update_drawings(server_);
-    paused_ = snapshot.paused;
+    if (client_) {
+      scene_.update_drawings(client_->drawings());
+    }
     update_title(snapshot, follow);
-    // Presentation is FIFO, so this blocks at the display's refresh rate. That only
-    // slows down this loop; the simulation runs on its own thread.
+    // Presentation is FIFO, so this blocks at the display's refresh rate, which
+    // only slows down this loop: the simulation runs in another process.
     const vk::Extent2D extent = renderer_.extent();
     renderer_.draw_frame(scene_.frame(snapshot, follow, extent.width, extent.height));
+  }
+}
+
+void Viewer::connect() {
+  const auto now = std::chrono::steady_clock::now();
+  if (client_ || now < next_connect_attempt_) {
+    return;
+  }
+  next_connect_attempt_ = now + connect_interval;
+  try {
+    client_.emplace(settings_.socket);
+    sent_input_ = {};  // The new simulator has none.
+  } catch (const std::system_error&) {
+    // Not running (yet); try again later.
   }
 }
 
@@ -79,14 +123,21 @@ void Viewer::handle_key(const platform::KeyEvent& event) {
         quit_requested_ = true;
         return;
       case XKB_KEY_space:
-        runner_.push(runtime::SetPaused{.paused = !paused_});
+        if (client_) {
+          client_->set_paused(!client_->snapshot().paused);
+        }
         return;
       case XKB_KEY_r:
-        runner_.push(runtime::Reset{});
-        sent_input_ = {};  // The controller forgets its input on reset.
+        if (client_) {
+          client_->reset();
+          sent_input_ = {};  // The controller forgets its input on reset.
+        }
         return;
       case XKB_KEY_Tab:
         follow_next_ = true;  // Done with the next snapshot, which has the current vehicles.
+        return;
+      case XKB_KEY_c:
+        scene_.set_camera_mode(next_camera_mode(scene_.camera_mode()));
         return;
       default:
         break;
@@ -112,9 +163,12 @@ std::size_t Viewer::followed(const runtime::Roster& roster) {
   if (found != vehicles.end()) {
     return static_cast<std::size_t>(found - vehicles.begin());
   }
-  // Gone, or not chosen yet: follow the first, if there is any.
-  follow_ = vehicles.empty() ? std::string{} : vehicles.front().name;
-  sent_input_ = {};
+  // Gone, or not chosen yet: follow the first. Without vehicles, such as before
+  // they arrive, keep the name in case it comes.
+  if (!vehicles.empty()) {
+    follow_ = vehicles.front().name;
+    sent_input_ = {};
+  }
   return 0;
 }
 
@@ -124,8 +178,8 @@ void Viewer::follow_next_vehicle(const runtime::Roster& roster) {
   }
   // Let go of the sticks of the vehicle left behind. The held keys are sent to the
   // new one right after.
-  if (sent_input_ != runtime::PilotInput{} && !follow_.empty()) {
-    runner_.push(runtime::SetPilotInput{.vehicle = follow_, .input = {}});
+  if (sent_input_ != runtime::PilotInput{} && client_) {
+    client_->set_pilot_input(follow_, {});
   }
   sent_input_ = {};
   follow_ = roster.vehicles[(followed(roster) + 1) % roster.vehicles.size()].name;
@@ -174,10 +228,15 @@ void Viewer::update_title(const runtime::Snapshot& snapshot, std::size_t follow)
     vehicle += std::format("altitude {:.2f} m, ", 0.0 - snapshot.vehicles[follow].state.position.z);
   }
   const vk::Extent2D extent = renderer_.extent();
-  window_.set_title(std::format(
-      "Multirotor Simulator — {}{:.1f} s, {:.2f}× real time{} | {}×{}, {}× MSAA, GPU {:.3f} ms", vehicle,
-      snapshot.time, snapshot.real_time_factor, status, extent.width, extent.height, renderer_.msaa_samples(),
-      gpu_time_ms_));
+  const std::string details = std::format("{} camera | {}×{}, {}× MSAA, GPU {:.3f} ms", to_string(scene_.camera_mode()),
+                                          extent.width, extent.height, renderer_.msaa_samples(), gpu_time_ms_);
+  if (!client_) {
+    window_.set_title(std::format("Multirotor Simulator — waiting for a simulator at {} | {}",
+                                  settings_.socket.native(), details));
+    return;
+  }
+  window_.set_title(std::format("Multirotor Simulator — {}{:.1f} s, {:.2f}× real time{} | {}", vehicle,
+                                snapshot.time, snapshot.real_time_factor, status, details));
 }
 
 }  // namespace sim::viewer

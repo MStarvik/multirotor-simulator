@@ -46,7 +46,8 @@ int record(const runtime::Options& options) {
     runner.add_vehicle(std::move(vehicle));
   }
 
-  scene::SceneView scene{options.camera_distance};
+  scene::SceneView scene{
+      {.mode = options.camera, .distance = options.camera_distance, .position = options.camera_position}};
   const render::VulkanContext vulkan;
   render::OffscreenRenderer renderer{vulkan, {.width = options.width, .height = options.height},
                                      options.msaa_samples, scene.meshes()};
@@ -62,9 +63,9 @@ int record(const runtime::Options& options) {
     } else {
       demo_flight.run_until(runner, time);
     }
-    scene.update_drawings(server);
+    scene.update_drawings(server.drawings());
     const runtime::Snapshot& snapshot = runner.latest();
-    if (scene.update_vehicles(*snapshot.roster)) {
+    if (scene.update_vehicles(snapshot.roster)) {
       renderer.set_meshes(scene.meshes());
     }
     const auto& vehicles = snapshot.roster->vehicles;

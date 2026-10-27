@@ -7,8 +7,8 @@
 #include <cstring>
 #include <format>
 #include <print>
+#include <stdexcept>
 #include <string>
-#include <string_view>
 #include <system_error>
 #include <utility>
 
@@ -17,37 +17,12 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-#include <multirotor_sim/sim.h>
-
 namespace sim::ipc {
 namespace {
 
-constexpr std::size_t max_message_size =
-    sizeof(sim_viz_path) + SIM_VIZ_MAX_PATH_POINTS * sizeof(Float3);
-constexpr int poll_timeout_ms = 100;  // Bounds how long stopping takes.
-
-template <typename T>
-T read_as(std::span<const std::byte> bytes) {
-  T value;
-  std::memcpy(&value, bytes.data(), sizeof value);  // memcpy, since the bytes may be unaligned.
-  return value;
-}
-
-Float3 to_float3(const float (&v)[3]) { return {v[0], v[1], v[2]}; }
-
-// Up to the first NUL, or all of it.
-std::string read_name(const char (&name)[SIM_NAME_SIZE]) {
-  return std::string{name, ::strnlen(name, SIM_NAME_SIZE)};
-}
-
-// Removes all drawings of one client. Returns whether there were any.
-bool erase_client(std::map<VizDrawingKey, VizDrawing>& drawings, std::uint64_t client) {
-  const auto first = drawings.lower_bound({client, 0});
-  const auto last = drawings.lower_bound({client + 1, 0});
-  const bool any = first != last;
-  drawings.erase(first, last);
-  return any;
-}
+constexpr int poll_timeout_ms = 100;  // Bounds how long stopping, and noticing new vehicles, takes.
+// Room for several of the largest messages, so a subscriber always gets the vehicles.
+constexpr int send_buffer_size = static_cast<int>(4 * max_message_size);
 
 sim_status to_wire(runtime::Status status) {
   switch (status) {
@@ -61,21 +36,16 @@ sim_status to_wire(runtime::Status status) {
   return SIM_FAILED;
 }
 
-sim_ctl_reply make_reply(std::uint32_t request_id, sim_status status, std::string_view message) {
+sim_ctl_reply make_reply(std::uint32_t request_id, runtime::Status status, std::string_view message) {
   sim_ctl_reply reply{};
-  reply.header = {.type = SIM_CTL_REPLY, .version = SIM_PROTOCOL_VERSION, .id = request_id, .reserved = 0};
-  reply.status = status;
+  reply.header = make_header(SIM_CTL_REPLY, request_id);
+  reply.status = to_wire(status);
   const std::size_t length = std::min(message.size(), sizeof reply.message - 1);
   std::memcpy(reply.message, message.data(), length);
   return reply;
 }
 
 }  // namespace
-
-struct SimServer::Client {
-  UniqueFd fd;
-  std::uint64_t id;
-};
 
 struct SimServer::Reply {
   std::uint64_t client;
@@ -120,6 +90,7 @@ SimServer::SimServer(std::filesystem::path socket_path, runtime::SimRunner& runn
                      const SymmetricFrame& default_frame)
     : listener_{std::move(socket_path)},
       runner_{runner},
+      snapshots_{runner.add_snapshot_reader()},
       default_frame_{default_frame},
       replies_{std::make_shared<ReplyQueue>()},
       thread_{[this](std::stop_token stop) { serve(stop); }} {
@@ -134,8 +105,6 @@ VizScene SimServer::drawings() const {
 }
 
 void SimServer::serve(const std::stop_token& stop) {
-  std::vector<Client> clients;
-  std::uint64_t next_client_id = 1;
   std::vector<pollfd> poll_entries;
   std::vector<std::byte> buffer(max_message_size);
   constexpr std::size_t first_client_entry = 2;  // After the listener and the reply queue.
@@ -144,47 +113,57 @@ void SimServer::serve(const std::stop_token& stop) {
     poll_entries.clear();
     poll_entries.push_back({.fd = listener_.fd(), .events = POLLIN, .revents = 0});
     poll_entries.push_back({.fd = replies_->fd(), .events = POLLIN, .revents = 0});
-    for (const Client& client : clients) {
-      poll_entries.push_back({.fd = client.fd.get(), .events = POLLIN, .revents = 0});
+    for (const Client& client : clients_) {
+      const short events = client.blocked ? POLLIN | POLLOUT : POLLIN;
+      poll_entries.push_back({.fd = client.fd.get(), .events = events, .revents = 0});
     }
-    if (::poll(poll_entries.data(), poll_entries.size(), poll_timeout_ms) <= 0) {
-      continue;
-    }
+    ::poll(poll_entries.data(), poll_entries.size(), poll_timeout_ms);
 
-    for (std::size_t i = 0; i < clients.size(); ++i) {
-      if (poll_entries[first_client_entry + i].revents == 0) {
-        continue;
+    for (std::size_t i = 0; i < clients_.size(); ++i) {
+      const short revents = poll_entries[first_client_entry + i].revents;
+      if ((revents & POLLOUT) != 0) {
+        clients_[i].blocked = false;
       }
-      // Drain everything this client has sent.
-      Client& client = clients[i];
-      while (true) {
-        const ssize_t length =
-            ::recv(client.fd.get(), buffer.data(), buffer.size(), MSG_DONTWAIT | MSG_TRUNC);
-        if (length < 0 && (errno == EAGAIN || errno == EINTR)) {
-          break;
-        }
-        if (length <= 0) {
-          client.fd.reset();  // Disconnected.
-          remove_drawings_of(client.id);
-          break;
-        }
-        if (static_cast<std::size_t>(length) > buffer.size()) {
-          std::println(stderr, "sim.sock: dropped a {} byte message, larger than the maximum", length);
-          continue;
-        }
-        handle_message(client, std::span{buffer}.first(static_cast<std::size_t>(length)));
+      if ((revents & (POLLIN | POLLHUP | POLLERR)) != 0) {
+        receive(clients_[i], buffer);
       }
     }
-    std::erase_if(clients, [](const Client& client) { return !client.fd; });
-
     if ((poll_entries[1].revents & POLLIN) != 0) {
-      send_replies(clients);
+      send_replies();
     }
+
+    // Also every poll timeout, to notice vehicles coming or going.
+    const std::shared_ptr<const runtime::Roster> roster = snapshots_.latest().roster;
+    for (Client& client : clients_) {
+      update(client, *roster);
+    }
+    std::erase_if(clients_, [](const Client& client) { return !client.fd; });
+
     if ((poll_entries[0].revents & POLLIN) != 0) {
       if (UniqueFd fd = listener_.accept()) {
-        clients.push_back({.fd = std::move(fd), .id = next_client_id++});
+        ::setsockopt(fd.get(), SOL_SOCKET, SO_SNDBUF, &send_buffer_size, sizeof send_buffer_size);
+        clients_.push_back({.fd = std::move(fd), .id = next_client_id_++});
       }
     }
+  }
+}
+
+void SimServer::receive(Client& client, std::span<std::byte> buffer) {
+  // Drain everything this client has sent.
+  while (client.fd) {
+    const ssize_t length = ::recv(client.fd.get(), buffer.data(), buffer.size(), MSG_DONTWAIT | MSG_TRUNC);
+    if (length < 0 && (errno == EAGAIN || errno == EINTR)) {
+      return;
+    }
+    if (length <= 0) {
+      disconnect(client);
+      return;
+    }
+    if (static_cast<std::size_t>(length) > buffer.size()) {
+      std::println(stderr, "sim.sock: dropped a {} byte message, larger than the maximum", length);
+      continue;
+    }
+    handle_message(client, buffer.first(static_cast<std::size_t>(length)));
   }
 }
 
@@ -201,65 +180,37 @@ void SimServer::handle_message(Client& client, std::span<const std::byte> messag
   if (header.type >= SIM_CTL_PAUSE) {
     handle_request(client, header.type, message);
   } else {
-    handle_drawing(client.id, header.type, message);
+    handle_drawing(client, message);
   }
 }
 
-void SimServer::handle_drawing(std::uint64_t client, std::uint32_t type, std::span<const std::byte> message) {
+void SimServer::handle_drawing(const Client& client, std::span<const std::byte> message) {
   const auto header = read_as<sim_header>(message);
   const std::lock_guard lock{mutex_};
-  switch (type) {
-    case SIM_VIZ_MARKER: {
-      if (message.size() != sizeof(sim_viz_marker)) {
-        std::println(stderr, "sim.sock: dropped a marker of the wrong size");
-        return;
+  switch (header.type) {
+    case SIM_VIZ_MARKER:
+    case SIM_VIZ_PATH:
+      try {
+        set_drawing(client, header.id, decode_drawing(message));
+      } catch (const std::invalid_argument& error) {
+        std::println(stderr, "sim.sock: dropped {}", error.what());
       }
-      const auto marker = read_as<sim_viz_marker>(message);
-      scene_.drawings[{client, header.id}] = VizMarker{
-          .position = to_float3(marker.position),
-          .color = to_float3(marker.color),
-          .size = marker.size,
-      };
       break;
-    }
-    case SIM_VIZ_PATH: {
-      if (message.size() < sizeof(sim_viz_path)) {
-        std::println(stderr, "sim.sock: dropped a path of the wrong size");
-        return;
-      }
-      const auto path = read_as<sim_viz_path>(message);
-      const auto points = message.subspan(sizeof(sim_viz_path));
-      if (path.point_count > SIM_VIZ_MAX_PATH_POINTS || points.size() != path.point_count * sizeof(Float3)) {
-        std::println(stderr, "sim.sock: dropped a path whose size doesn't match its point count");
-        return;
-      }
-      VizPath drawing{.points = std::vector<Float3>(path.point_count),
-                      .color = to_float3(path.color),
-                      .width = path.width};
-      std::memcpy(drawing.points.data(), points.data(), points.size());
-      scene_.drawings[{client, header.id}] = std::move(drawing);
-      break;
-    }
     case SIM_VIZ_REMOVE:
-      scene_.drawings.erase({client, header.id});
+      remove_drawing(client, header.id);
       break;
     case SIM_VIZ_CLEAR:
-      erase_client(scene_.drawings, client);
+      remove_drawings_of(client);
       break;
     default:
-      std::println(stderr, "sim.sock: dropped a message of unknown type {}", type);
-      return;
+      std::println(stderr, "sim.sock: dropped a message of unknown type {}", header.type);
+      break;
   }
-  changed();
 }
 
 void SimServer::handle_request(Client& client, std::uint32_t type, std::span<const std::byte> message) {
   const auto header = read_as<sim_header>(message);
-  const auto reject = [&](std::string_view why) {
-    if (header.id != 0) {
-      replies_->post({.client = client.id, .message = make_reply(header.id, SIM_INVALID, why)});
-    }
-  };
+  const auto reject = [&](std::string_view why) { answer(client, header.id, runtime::Status::invalid, why); };
   const auto expect_size = [&](std::size_t size) {
     if (message.size() != size) {
       reject(std::format("a message of type {} must be {} bytes, not {}", type, size, message.size()));
@@ -316,6 +267,31 @@ void SimServer::handle_request(Client& client, std::uint32_t type, std::span<con
                runtime::RemoveVehicle{.name = read_name(read_as<sim_ctl_remove_vehicle>(message).name)});
       }
       break;
+    case SIM_CTL_SUBSCRIBE:
+      if (expect_size(sizeof(sim_header))) {
+        // Everything is news to a new subscriber.
+        client.subscribed = true;
+        client.roster_sent = false;
+        {
+          const std::lock_guard lock{mutex_};
+          for (const auto& [id, drawing] : scene_.drawings) {
+            client.changed_drawings.insert(id);
+          }
+        }
+        answer(client, header.id, runtime::Status::ok, {});
+      }
+      break;
+    case SIM_CTL_GET_STATE:
+      if (expect_size(sizeof(sim_header))) {
+        // The vehicles first, so that the state can be matched to them.
+        const runtime::Snapshot& snapshot = snapshots_.latest();
+        update(client, *snapshot.roster);
+        if (!client.blocked && client.fd) {
+          // Dropped if there's no room: the client asks again for a newer one anyway.
+          [[maybe_unused]] const bool sent = send_to(client, encode_state(header.id, snapshot));
+        }
+      }
+      break;
     default:
       reject(std::format("unknown message type {}", type));
       break;
@@ -358,15 +334,21 @@ void SimServer::submit(const Client& client, std::uint32_t request_id, runtime::
   }
   runner_.push(std::move(command),
                [replies = replies_, client = client.id, request_id](const runtime::CommandResult& result) {
-                 replies->post({.client = client,
-                                .message = make_reply(request_id, to_wire(result.status), result.message)});
+                 replies->post({.client = client, .message = make_reply(request_id, result.status, result.message)});
                });
 }
 
-void SimServer::send_replies(std::span<Client> clients) {
+void SimServer::answer(const Client& client, std::uint32_t request_id, runtime::Status status,
+                       std::string_view message) {
+  if (request_id != 0) {
+    replies_->post({.client = client.id, .message = make_reply(request_id, status, message)});
+  }
+}
+
+void SimServer::send_replies() {
   for (const Reply& reply : replies_->take()) {
-    const auto client = std::ranges::find(clients, reply.client, &Client::id);
-    if (client == clients.end() || !client->fd) {
+    const auto client = std::ranges::find(clients_, reply.client, &Client::id);
+    if (client == clients_.end() || !client->fd) {
       continue;  // It disconnected meanwhile.
     }
     // A client that doesn't read its replies loses them rather than blocking us.
@@ -374,13 +356,90 @@ void SimServer::send_replies(std::span<Client> clients) {
   }
 }
 
-void SimServer::remove_drawings_of(std::uint64_t client) {
-  const std::lock_guard lock{mutex_};
-  if (erase_client(scene_.drawings, client)) {
-    changed();
+void SimServer::update(Client& client, const runtime::Roster& roster) {
+  if (!client.subscribed || client.blocked || !client.fd) {
+    return;
+  }
+  if (!client.roster_sent || client.sent_roster_version != roster.version) {
+    if (!send_to(client, encode_vehicles(roster))) {
+      return;
+    }
+    client.roster_sent = true;
+    client.sent_roster_version = roster.version;
+  }
+
+  // Whatever each changed drawing is now, which may be gone.
+  while (!client.changed_drawings.empty()) {
+    const std::uint32_t id = *client.changed_drawings.begin();
+    std::vector<std::byte> message;
+    {
+      const std::lock_guard lock{mutex_};
+      const auto drawing = scene_.drawings.find(id);
+      message = drawing != scene_.drawings.end() ? encode_drawing(id, drawing->second)
+                                                 : to_bytes(make_header(SIM_VIZ_REMOVE, id));
+    }
+    if (!send_to(client, message)) {
+      return;
+    }
+    client.changed_drawings.erase(client.changed_drawings.begin());
   }
 }
 
-void SimServer::changed() { version_.store(++scene_.version, std::memory_order_release); }
+bool SimServer::send_to(Client& client, std::span<const std::byte> message) {
+  if (::send(client.fd.get(), message.data(), message.size(), MSG_DONTWAIT | MSG_NOSIGNAL) >= 0) {
+    return true;
+  }
+  if (errno == EAGAIN) {
+    client.blocked = true;
+  } else {
+    disconnect(client);
+  }
+  return false;
+}
+
+void SimServer::disconnect(Client& client) {
+  client.fd.reset();
+  const std::lock_guard lock{mutex_};
+  remove_drawings_of(client);
+}
+
+void SimServer::set_drawing(const Client& client, std::uint32_t client_drawing_id, VizDrawing drawing) {
+  const auto [entry, added] = drawing_ids_.try_emplace({client.id, client_drawing_id}, next_drawing_id_);
+  if (added) {
+    ++next_drawing_id_;
+  }
+  scene_.drawings[entry->second] = std::move(drawing);
+  changed(entry->second);
+}
+
+void SimServer::remove_drawing(const Client& client, std::uint32_t client_drawing_id) {
+  const auto entry = drawing_ids_.find({client.id, client_drawing_id});
+  if (entry == drawing_ids_.end()) {
+    return;
+  }
+  const std::uint32_t id = entry->second;
+  drawing_ids_.erase(entry);
+  scene_.drawings.erase(id);
+  changed(id);
+}
+
+void SimServer::remove_drawings_of(const Client& client) {
+  const auto first = drawing_ids_.lower_bound({client.id, 0});
+  const auto last = drawing_ids_.lower_bound({client.id + 1, 0});
+  for (auto entry = first; entry != last; ++entry) {
+    scene_.drawings.erase(entry->second);
+    changed(entry->second);
+  }
+  drawing_ids_.erase(first, last);
+}
+
+void SimServer::changed(std::uint32_t drawing) {
+  for (Client& subscriber : clients_) {
+    if (subscriber.subscribed) {
+      subscriber.changed_drawings.insert(drawing);
+    }
+  }
+  version_.store(++scene_.version, std::memory_order_release);
+}
 
 }  // namespace sim::ipc

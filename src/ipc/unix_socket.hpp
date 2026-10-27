@@ -50,6 +50,10 @@ class ListeningSocket {
   UniqueFd fd_;
 };
 
+// Connects to a SOCK_SEQPACKET UNIX socket. Throws std::system_error if nothing
+// listens there.
+[[nodiscard]] UniqueFd connect_to(const std::filesystem::path& path);
+
 // Waits up to timeout_ms for fd to become readable. Returns poll's revents, or 0 on
 // timeout or interruption.
 [[nodiscard]] short wait_readable(int fd, int timeout_ms);

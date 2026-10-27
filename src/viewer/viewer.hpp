@@ -3,10 +3,11 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <optional>
 #include <string>
-#include <vector>
 
-#include "ipc/sim_server.hpp"
+#include "ipc/sim_client.hpp"
 #include "platform/wayland/display.hpp"
 #include "platform/wayland/window.hpp"
 #include "render/renderer.hpp"
@@ -17,25 +18,28 @@
 namespace sim::viewer {
 
 struct ViewerSettings {
+  std::filesystem::path socket;    // The simulator socket.
   std::string follow;              // The vehicle followed at first; empty for the first one.
+  scene::CameraSettings camera;
   std::uint32_t msaa_samples = 4;  // Rounded down to what the GPU supports; 1 disables MSAA.
-  double camera_distance = 2.4;    // From the follow camera to the vehicle, m.
+  bool exit_with_simulator = false;  // Rather than waiting for the next one.
 };
 
-// Shows the latest simulation snapshot in a window, along with drawings received on
-// the viz socket, and turns keyboard input into commands for the simulation. The
-// camera follows one vehicle at a time, which is also the one the keys fly. It
-// never touches the simulation directly, so it can't stall it: a slow or hidden
-// window only means fewer frames are shown.
+// Shows a simulation in a window, along with everyone's drawings, and turns keyboard
+// input into requests to the simulator. Talks to the simulator only over its
+// socket, so any number of viewers can watch one simulation, each with its own
+// camera, and none of them can stall it: a slow or hidden window only means fewer
+// frames are shown. The camera follows one vehicle at a time, which is also the one
+// the keys fly.
 class Viewer {
  public:
-  // Shows the drawings the server receives; it must outlive the viewer.
-  Viewer(runtime::SimRunner& runner, const ipc::SimServer& server, const ViewerSettings& settings);
+  explicit Viewer(const ViewerSettings& settings);
 
   Viewer(const Viewer&) = delete;
   Viewer& operator=(const Viewer&) = delete;
 
-  // Runs until the window is closed or Escape is pressed.
+  // Runs until the window is closed or Escape is pressed, or with
+  // exit_with_simulator, until the simulator exits.
   void run();
 
  private:
@@ -51,6 +55,8 @@ class Viewer {
     bool yaw_right = false;
   };
 
+  // Connects to the simulator if not connected, trying at most once a second.
+  void connect();
   void handle_key(const platform::KeyEvent& event);
   // The index of the followed vehicle, after switching to another if it is gone.
   [[nodiscard]] std::size_t followed(const runtime::Roster& roster);
@@ -58,7 +64,12 @@ class Viewer {
   [[nodiscard]] runtime::PilotInput pilot_input() const;
   void update_title(const runtime::Snapshot& snapshot, std::size_t follow);
 
-  runtime::SimRunner& runner_;
+  ViewerSettings settings_;
+  std::optional<ipc::SimClient> client_;
+  std::chrono::steady_clock::time_point next_connect_attempt_;
+  // Shown while not connected.
+  const runtime::Snapshot no_simulation_{.roster = std::make_shared<const runtime::Roster>()};
+
   std::string follow_;  // The vehicle's name, which outlasts others coming and going.
   scene::SceneView scene_;
 
@@ -69,12 +80,9 @@ class Viewer {
   render::VulkanContext vulkan_;
   render::Renderer renderer_;
 
-  const ipc::SimServer& server_;
-
   HeldKeys keys_;
   runtime::PilotInput sent_input_;  // To the followed vehicle.
-  bool follow_next_ = false;  // Tab was pressed.
-  bool paused_ = false;
+  bool follow_next_ = false;        // Tab was pressed.
   bool quit_requested_ = false;
   std::chrono::steady_clock::time_point next_title_update_;
   double gpu_time_ms_ = 0.0;  // Averaged over the last title update interval.

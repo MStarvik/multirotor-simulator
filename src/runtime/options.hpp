@@ -12,6 +12,14 @@
 
 namespace sim::runtime {
 
+// How the viewer's camera follows a vehicle.
+enum class CameraMode {
+  follow,    // From a fixed direction, south-west of it and above.
+  chase,     // From behind and above, turning with it.
+  overhead,  // From straight above, north up.
+  fixed,     // From a fixed position, turning to keep it in view.
+};
+
 struct Options {
   SymmetricFrame frame;  // Shared by all vehicles.
   // Vehicle names, which name their SITL sockets. Vehicle i starts i·spacing east of
@@ -26,6 +34,10 @@ struct Options {
   std::uint32_t msaa_samples = 4;  // Viewer only: anti-aliasing samples per pixel.
   double camera_distance = 2.4;    // Viewer only: follow camera distance, m.
   std::string follow;              // Viewer and recorder: the vehicle the camera follows; empty for the first.
+  CameraMode camera = CameraMode::follow;  // Viewer and recorder.
+  Vec3 camera_position{-8.0, -8.0, -3.0};  // Viewer and recorder, CameraMode::fixed: world frame, m.
+  bool no_viewer = false;            // Simulator: don't open a viewer.
+  bool exit_with_simulator = false;  // Viewer: exit when the simulator does, rather than waiting for another.
   bool realtime = false;   // Headless only: pace to the wall clock.
   double duration = 10.0;  // Headless and recorder: simulated seconds to run.
   std::filesystem::path output;  // Recorder only: the video file to write.
@@ -33,6 +45,9 @@ struct Options {
   std::uint32_t width = 1280;     // Recorder only: video size in pixels.
   std::uint32_t height = 720;
 };
+
+// As --camera takes it.
+[[nodiscard]] std::string_view to_string(CameraMode mode);
 
 // Where the sockets of the simulator with this instance name are, by default.
 [[nodiscard]] std::filesystem::path default_socket_directory(std::string_view instance);

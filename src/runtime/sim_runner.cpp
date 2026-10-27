@@ -59,6 +59,9 @@ void SimRunner::add(VehicleSpec spec) {
   if (find_vehicle(spec.name)) {
     throw std::invalid_argument{std::format("there already is a vehicle named '{}'", spec.name)};
   }
+  if (vehicles_.size() >= max_vehicles) {
+    throw std::invalid_argument{std::format("there can be at most {} vehicles", max_vehicles)};
+  }
   std::unique_ptr<FlightController> controller = make_controller_(spec);
   simulation_.add_vehicle(spec.model, spec.initial_state);
   vehicles_.push_back({.controller = std::move(controller), .answer = std::nullopt});
@@ -78,6 +81,12 @@ void SimRunner::change_roster(const std::function<void(std::vector<VehicleSpec>&
   change(roster->vehicles);
   roster_ = std::move(roster);
   next_snapshot_.vehicles.resize(vehicles_.size());
+}
+
+TripleBuffer<Snapshot>& SimRunner::add_snapshot_reader() {
+  auto& reader = *other_readers_.emplace_back(std::make_unique<TripleBuffer<Snapshot>>());
+  reader.publish(next_snapshot_);
+  return reader;
 }
 
 void SimRunner::push(Command command, Completion done) {
@@ -271,6 +280,9 @@ void SimRunner::publish() {
   }
   // Copy-assigned into a slot whose vector already has the capacity.
   snapshots_.publish(next_snapshot_);
+  for (const auto& reader : other_readers_) {
+    reader->publish(next_snapshot_);
+  }
 }
 
 }  // namespace sim::runtime

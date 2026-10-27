@@ -77,6 +77,18 @@ UniqueFd ListeningSocket::accept() const {
   return UniqueFd{::accept4(fd_.get(), nullptr, nullptr, SOCK_CLOEXEC)};
 }
 
+UniqueFd connect_to(const std::filesystem::path& path) {
+  const sockaddr_un address = make_address(path);
+  UniqueFd fd{::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0)};
+  if (!fd) {
+    throw_errno("socket");
+  }
+  if (::connect(fd.get(), reinterpret_cast<const sockaddr*>(&address), sizeof address) != 0) {
+    throw_errno(std::format("connect {}", path.native()));
+  }
+  return fd;
+}
+
 short wait_readable(int fd, int timeout_ms) {
   pollfd entry{.fd = fd, .events = POLLIN, .revents = 0};
   return ::poll(&entry, 1, timeout_ms) > 0 ? entry.revents : 0;

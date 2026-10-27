@@ -20,6 +20,13 @@
 // sends requests with nonzero ids must read the replies, or they are dropped once
 // its receive buffer is full.
 //
+// Viewers subscribe (SIM_CTL_SUBSCRIBE) to be sent what they need to show the
+// simulation: the vehicles (SIM_VIEW_VEHICLES) whenever they change, and everyone's
+// drawings (SIM_VIZ_*, with ids chosen by the simulator) as they change. The
+// simulator sends the latest of these when the subscriber's socket has room, so a
+// slow subscriber skips changes but always catches up. Any client can ask for the
+// state of the vehicles (SIM_CTL_GET_STATE), answered with SIM_VIEW_STATE.
+//
 // Units are SI. Frames: world NED (x north, y east, z down), body FRD (x forward,
 // y right, z down). Colors are linear RGB in [0, 1].
 
@@ -32,6 +39,8 @@
 // digits, '-', '_' and '.', not starting with '.'. Padded with NUL bytes, so a name
 // of exactly this length has no terminating NUL.
 #define SIM_NAME_SIZE 32u
+#define SIM_MAX_VEHICLES 256u
+#define SIM_MAX_ROTORS 12u
 
 enum sim_message_type : uint32_t {
   // Drawings, client -> simulator.
@@ -47,9 +56,15 @@ enum sim_message_type : uint32_t {
   SIM_CTL_PILOT_INPUT = 19,  // struct sim_ctl_pilot_input
   SIM_CTL_SPAWN_VEHICLE = 20,   // struct sim_ctl_spawn_vehicle
   SIM_CTL_REMOVE_VEHICLE = 21,  // struct sim_ctl_remove_vehicle
+  SIM_CTL_SUBSCRIBE = 22,       // struct sim_header
+  SIM_CTL_GET_STATE = 23,       // struct sim_header; answered with SIM_VIEW_STATE
 
   // Simulator -> client.
   SIM_CTL_REPLY = 48,  // struct sim_ctl_reply
+
+  // Simulator -> client, besides SIM_VIZ_* to subscribers.
+  SIM_VIEW_VEHICLES = 64,  // struct sim_view_vehicles, followed by its vehicles
+  SIM_VIEW_STATE = 65,     // struct sim_view_state, followed by its vehicles' states
 };
 
 struct sim_header {
@@ -144,6 +159,56 @@ struct sim_ctl_reply {
   char message[112];  // Explains a failure, NUL-terminated. Empty on success.
 };
 
+struct sim_view_rotor {
+  double position[3];  // Body frame, m.
+  double spin;         // +1 if it turns clockwise seen from above, -1 if counter-clockwise.
+};
+
+struct sim_view_vehicle {
+  char name[SIM_NAME_SIZE];
+  uint32_t controller;  // enum sim_controller
+  uint32_t rotor_count;
+  double propeller_radius;  // m
+  struct sim_view_rotor rotors[SIM_MAX_ROTORS];
+};
+
+// Simulator -> subscriber: all vehicles, right after subscribing and whenever they
+// come or go. Followed by count sim_view_vehicle, in the order of every
+// sim_view_state with the same roster_version.
+struct sim_view_vehicles {
+  struct sim_header header;  // header.id is 0.
+  uint64_t roster_version;   // Increases with every change.
+  uint32_t count;            // At most SIM_MAX_VEHICLES.
+  uint32_t reserved;
+};
+
+enum sim_view_vehicle_flags : uint32_t {
+  SIM_VIEW_WAITING = 1u << 0,  // Waiting for its flight controller to answer.
+};
+
+struct sim_view_vehicle_state {
+  double position[3];  // World frame, m.
+  double attitude[4];  // Quaternion w, x, y, z rotating body vectors into the world frame.
+  uint32_t flags;      // enum sim_view_vehicle_flags
+  uint32_t reserved;
+};
+
+enum sim_view_state_flags : uint32_t {
+  SIM_VIEW_PAUSED = 1u << 0,
+};
+
+// Simulator -> client, answering SIM_CTL_GET_STATE (header.id is the request's).
+// Followed by count sim_view_vehicle_state, in the order of the sim_view_vehicles
+// with the same roster_version.
+struct sim_view_state {
+  struct sim_header header;
+  uint64_t roster_version;
+  double time;              // Simulation time, s.
+  double real_time_factor;  // Recent simulated seconds per wall-clock second.
+  uint32_t flags;           // enum sim_view_state_flags
+  uint32_t count;
+};
+
 static_assert(sizeof(struct sim_header) == 16, "unexpected padding in sim_header");
 static_assert(sizeof(struct sim_viz_marker) == 48, "unexpected padding in sim_viz_marker");
 static_assert(sizeof(struct sim_viz_path) == 40, "unexpected padding in sim_viz_path");
@@ -153,3 +218,7 @@ static_assert(sizeof(struct sim_ctl_pilot_input) == 80, "unexpected padding in s
 static_assert(sizeof(struct sim_ctl_spawn_vehicle) == 104, "unexpected padding in sim_ctl_spawn_vehicle");
 static_assert(sizeof(struct sim_ctl_remove_vehicle) == 48, "unexpected padding in sim_ctl_remove_vehicle");
 static_assert(sizeof(struct sim_ctl_reply) == 136, "unexpected padding in sim_ctl_reply");
+static_assert(sizeof(struct sim_view_vehicle) == 432, "unexpected padding in sim_view_vehicle");
+static_assert(sizeof(struct sim_view_vehicles) == 32, "unexpected padding in sim_view_vehicles");
+static_assert(sizeof(struct sim_view_vehicle_state) == 64, "unexpected padding in sim_view_vehicle_state");
+static_assert(sizeof(struct sim_view_state) == 48, "unexpected padding in sim_view_state");

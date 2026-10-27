@@ -4,12 +4,14 @@ A small multirotor simulator for Linux, built for testing a flight control
 stack in software-in-the-loop (SITL). It simulates the rigid-body dynamics of a
 multirotor and its rotors, an IMU and a barometer, for one vehicle or several. A
 flight controller per vehicle connects over a UNIX domain socket and runs in
-lockstep with the simulation. A viewer written directly against Vulkan and Wayland
-shows the vehicles, and other processes can draw setpoints and trajectories in it.
+lockstep with the simulation. Viewers written directly against Vulkan and Wayland
+show the vehicles, and other processes can draw setpoints and trajectories in them
+and control the simulation.
 
-The simulation never depends on the viewer. It runs on its own thread, and the same
-simulation also runs headless, without a window or GPU, and without being tied to
-the wall clock.
+The simulation never depends on a viewer. Viewers are separate processes that
+attach to a running simulator over its socket, any number at a time, each with its
+own camera. The same simulation also runs headless, without a window or GPU, and
+without being tied to the wall clock.
 
 ![The example SITL flight controller flying a circle](docs/media/circle.avif)
 
@@ -37,11 +39,15 @@ Builds go to `build/<preset>/`. Debug builds enable the Vulkan validation layers
 ## Running
 
 ```sh
-# Viewer, flown with the built-in controller and the keyboard
+# Simulator with a viewer, flown with the built-in controller and the keyboard
 ./build/release/multirotor-sim
 
-# Viewer, waiting for an external flight controller
+# Simulator with a viewer, waiting for an external flight controller
 ./build/release/multirotor-sim --sitl
+
+# Simulator without a viewer, and a viewer attached later, chasing the vehicle
+./build/release/multirotor-sim --no-viewer &
+./build/release/multirotor-sim-viewer --camera chase
 
 # Headless: a scripted flight, or an external flight controller with --sitl
 ./build/release/multirotor-sim-headless --duration 60
@@ -69,26 +75,34 @@ All programs take the same options; `--help` lists them. The main ones:
 | `--instance NAME` | Names this simulator, so that several can run at once (default: `default`) |
 | `--socket-dir DIR` | Where the sockets are created (default: `$XDG_RUNTIME_DIR/multirotor-sim/<instance>`) |
 | `--seed N` | Sensor noise seed; equal seeds and inputs give identical runs |
-| `--speed F` | Speed relative to real time (viewer, or headless with `--realtime`) |
+| `--speed F` | Speed relative to real time (simulator, or headless with `--realtime`) |
+| `--no-viewer` | Simulator: don't open a viewer |
 | `--duration S` | Headless and recorder: simulated seconds to run (headless runs unpaced, unless `--realtime`) |
 | `--msaa N` | Viewer and recorder: anti-aliasing samples, 1 (off), 2, 4 or 8 |
-| `--camera-distance M`, `--follow NAME` | Viewer and recorder: distance from the follow camera to the vehicle, and which vehicle it follows |
+| `--follow NAME` | Viewer and recorder: the vehicle the camera follows |
+| `--camera MODE` | Viewer and recorder: `follow` (from the south-west, above), `chase` (from behind), `overhead`, or `fixed` (from `--camera-position N,E,D`) |
+| `--camera-distance M` | Viewer and recorder: distance from the camera to the vehicle |
 | `--output FILE`, `--size WxH`, `--fps N` | Recorder: the output file, its size and frame rate |
 
 Viewer keys: **W/S** climb and descend, **arrow keys** pitch and roll, **A/D**
-yaw, **Tab** follow the next vehicle, **Space** pause, **R** reset, **Esc** quit.
-The keys fly the vehicle the camera follows: directly with the built-in controller,
-or with `--sitl` as stick inputs forwarded to its flight controller. The window
-title shows simulation time, altitude, real-time factor and GPU time per frame.
+yaw, **Tab** follow the next vehicle, **C** change camera mode, **Space** pause,
+**R** reset, **Esc** quit. The keys fly the vehicle the camera follows: directly
+with the built-in controller, or with `--sitl` as stick inputs forwarded to its
+flight controller. The window title shows simulation time, altitude, real-time
+factor and GPU time per frame.
+
+`multirotor-sim` runs until its viewer is closed, or with `--no-viewer`, until
+interrupted. `multirotor-sim-viewer` attaches to the simulator named by
+`--instance`; started before it, or after it exits, the viewer waits for one.
 
 ### Several vehicles and simulators
 
 Vehicles start on the ground in a row heading east from the origin, a couple of
 meters apart, and more can be added and removed while the simulator runs, with
 `multirotor-sim-ctl` or any client of the simulator socket. They don't collide with
-each other. With `--sitl`, each waits for its
-own flight controller, and the simulation steps once all of them have answered, so
-it doesn't start until every one has connected.
+each other. With `--sitl`, each waits for its own flight controller, and the
+simulation steps once all of them have answered, so it doesn't start until every
+one has connected.
 
 Each simulator keeps its sockets in a directory of its own, named by `--instance`:
 
@@ -151,7 +165,7 @@ shown, such as in this README. The animation above was made with:
 | `src/app` | Sets up the vehicles and their flight controllers from the options, for all programs |
 | `src/scene` | What is drawn for a snapshot, shared by the viewer and the recorder |
 | `src/platform`, `src/render` | Wayland window; Vulkan rendering to a window or offscreen |
-| `src/viewer`, `src/headless`, `src/recorder`, `src/ctl` | The programs |
+| `src/simulator`, `src/viewer`, `src/headless`, `src/recorder`, `src/ctl` | The programs |
 | `protocol/multirotor_sim` | C headers defining both socket protocols, for clients to include |
 | `examples`, `tests` | Example SITL client; tests run by `ctest` |
 

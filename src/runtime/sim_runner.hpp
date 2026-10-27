@@ -30,6 +30,8 @@ enum class ControllerKind {
 inline constexpr std::size_t max_name_length = 32;
 [[nodiscard]] bool is_valid_name(std::string_view name);
 
+inline constexpr std::size_t max_vehicles = 256;
+
 // Everything needed to add a vehicle to the simulation.
 struct VehicleSpec {
   std::string name;  // Unique in the simulation; names the vehicle's SITL socket.
@@ -55,7 +57,7 @@ struct VehicleSnapshot {
 struct Snapshot {
   double time = 0.0;  // Simulation time, s.
   std::shared_ptr<const Roster> roster;
-  std::vector<VehicleSnapshot> vehicles;  // In roster order.
+  std::vector<VehicleSnapshot> vehicles{};  // In roster order.
   double real_time_factor = 0.0;  // Recent simulated seconds per wall-clock second.
   bool paused = false;
 };
@@ -109,8 +111,8 @@ using ControllerFactory = std::function<std::unique_ptr<FlightController>(const 
 //
 // run() executes on one thread (a dedicated one with a viewer, or the main thread
 // when headless). Other threads may push() commands, which are applied between
-// steps. One thread may read the latest() snapshot, which is published after every
-// step.
+// steps. Snapshots are published after every step, to latest() and to any other
+// readers, each of which one thread may read.
 class SimRunner {
  public:
   SimRunner(double step_size, std::uint64_t seed, ControllerFactory make_controller, ClockPolicy clock);
@@ -127,6 +129,10 @@ class SimRunner {
 
   // The reference stays valid until the next call. Single consumer thread only.
   [[nodiscard]] const Snapshot& latest() { return snapshots_.latest(); }
+
+  // Another reader of snapshots, for another thread; it lives as long as the runner.
+  // Only before run() is first called.
+  [[nodiscard]] TripleBuffer<Snapshot>& add_snapshot_reader();
 
  private:
   struct Vehicle {
@@ -166,6 +172,7 @@ class SimRunner {
 
   Snapshot next_snapshot_;  // Reused between steps to avoid allocating.
   TripleBuffer<Snapshot> snapshots_;
+  std::vector<std::unique_ptr<TripleBuffer<Snapshot>>> other_readers_;
 };
 
 }  // namespace sim::runtime

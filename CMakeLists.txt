@@ -92,6 +92,8 @@ add_library(sim_protocol INTERFACE)
 target_include_directories(sim_protocol INTERFACE protocol)
 
 add_library(sim_ipc STATIC
+  src/ipc/messages.cpp
+  src/ipc/sim_client.cpp
   src/ipc/sitl_controller.cpp
   src/ipc/socket_directory.cpp
   src/ipc/unix_socket.cpp
@@ -115,6 +117,13 @@ target_link_libraries(sim_app
 
 add_executable(multirotor-sim-headless src/headless/main.cpp)
 target_link_libraries(multirotor-sim-headless PRIVATE sim_build_options sim_app sim_control sim_ipc)
+
+# -----------------------------------------------------------------------------
+# Simulator executable: paced to the wall clock, and opens a viewer
+# -----------------------------------------------------------------------------
+
+add_executable(multirotor-sim src/simulator/main.cpp)
+target_link_libraries(multirotor-sim PRIVATE sim_build_options sim_app sim_ipc)
 
 # -----------------------------------------------------------------------------
 # Command-line tool sending requests to a running simulator
@@ -261,16 +270,16 @@ target_link_libraries(sim_scene
   PRIVATE sim_build_options)
 
 # -----------------------------------------------------------------------------
-# Viewer executable: simulation thread plus a window showing it
+# Viewer executable: a window showing a running simulator, over its socket
 # -----------------------------------------------------------------------------
 
-add_executable(multirotor-sim
+add_executable(multirotor-sim-viewer
   src/viewer/main.cpp
   src/viewer/viewer.cpp)
-target_link_libraries(multirotor-sim
-  PRIVATE sim_build_options sim_app sim_control sim_ipc sim_platform sim_render sim_scene)
+target_link_libraries(multirotor-sim-viewer
+  PRIVATE sim_build_options sim_ipc sim_platform sim_render sim_scene)
 # Reuse sim_render's precompiled header instead of building a second copy.
-target_precompile_headers(multirotor-sim REUSE_FROM sim_render)
+target_precompile_headers(multirotor-sim-viewer REUSE_FROM sim_render)
 
 # -----------------------------------------------------------------------------
 # Recorder executable: renders a flight offscreen to a video file, via ffmpeg

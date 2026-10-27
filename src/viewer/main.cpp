@@ -2,16 +2,13 @@
 #include <cstdlib>
 #include <exception>
 #include <print>
-#include <thread>
-#include <utility>
 
-#include "app/setup.hpp"
-#include "ipc/socket_directory.hpp"
-#include "ipc/sim_server.hpp"
 #include "runtime/options.hpp"
-#include "runtime/sim_runner.hpp"
-#include "sim/multirotor.hpp"
 #include "viewer/viewer.hpp"
+
+// Shows a running simulator in a window. Any number of viewers can watch one
+// simulator, each with its own camera; one started before the simulator waits for
+// it, and one whose simulator exits waits for the next (unless told to exit too).
 
 int main(int argc, char** argv) {
   try {
@@ -19,29 +16,14 @@ int main(int argc, char** argv) {
     if (!options) {
       return EXIT_SUCCESS;
     }
-
-    const sim::ipc::SocketDirectory sockets{options->socket_directory};
-    sim::runtime::SimRunner runner =
-        sim::app::make_runner(*options, &sockets, sim::runtime::RealTime{.speed = options->speed});
-    const sim::ipc::SimServer server{sockets.sim_socket(), runner, options->frame};
-    // After the simulator socket, so that a flight controller that is already
-    // waiting finds it as soon as its SITL socket accepts it.
-    for (sim::runtime::VehicleSpec& vehicle : sim::app::initial_vehicles(*options)) {
-      runner.add_vehicle(std::move(vehicle));
-    }
-    sim::viewer::Viewer viewer{runner, server,
-                               {.follow = options->follow,
-                                .msaa_samples = options->msaa_samples,
-                                .camera_distance = options->camera_distance}};
-
-    // Declared last, so it is stopped and joined before the runner and viewer go away.
-    const std::jthread simulation_thread{[&runner](std::stop_token stop) {
-      try {
-        runner.run(stop);
-      } catch (const std::exception& error) {
-        std::println(stderr, "fatal: simulation failed: {}", error.what());
-        std::abort();
-      }
+    sim::viewer::Viewer viewer{{
+        .socket = options->socket_directory / "sim.sock",
+        .follow = options->follow,
+        .camera = {.mode = options->camera,
+                   .distance = options->camera_distance,
+                   .position = options->camera_position},
+        .msaa_samples = options->msaa_samples,
+        .exit_with_simulator = options->exit_with_simulator,
     }};
     viewer.run();
   } catch (const std::exception& error) {

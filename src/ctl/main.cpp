@@ -16,7 +16,6 @@
 
 #include <poll.h>
 #include <sys/socket.h>
-#include <sys/un.h>
 
 #include <multirotor_sim/sim.h>
 
@@ -159,21 +158,6 @@ std::vector<std::byte> make_request(std::string_view command, std::span<char* co
   throw std::invalid_argument{std::format("unknown command '{}' (see --help)", command)};
 }
 
-UniqueFd connect_to(const std::filesystem::path& path) {
-  sockaddr_un address{};
-  address.sun_family = AF_UNIX;
-  if (path.native().size() >= sizeof address.sun_path) {
-    throw std::invalid_argument{std::format("socket path is too long: {}", path.native())};
-  }
-  std::memcpy(address.sun_path, path.c_str(), path.native().size());
-  UniqueFd fd{::socket(AF_UNIX, SOCK_SEQPACKET | SOCK_CLOEXEC, 0)};
-  if (!fd || ::connect(fd.get(), reinterpret_cast<const sockaddr*>(&address), sizeof address) != 0) {
-    throw std::system_error{errno, std::generic_category(),
-                            std::format("could not connect to {}; is the simulator running?", path.native())};
-  }
-  return fd;
-}
-
 int run(std::span<char* const> args) {
   const std::string_view program = args.front();
   std::filesystem::path socket_directory;
@@ -204,7 +188,13 @@ int run(std::span<char* const> args) {
   }
 
   const std::vector<std::byte> request = make_request(args[i], args.subspan(i + 1));
-  const UniqueFd fd = connect_to(socket_directory / "sim.sock");
+  const std::filesystem::path socket = socket_directory / "sim.sock";
+  UniqueFd fd;
+  try {
+    fd = sim::ipc::connect_to(socket);
+  } catch (const std::system_error&) {
+    throw std::runtime_error{std::format("could not connect to {}; is the simulator running?", socket.native())};
+  }
   if (::send(fd.get(), request.data(), request.size(), MSG_NOSIGNAL) != static_cast<ssize_t>(request.size())) {
     throw std::system_error{errno, std::generic_category(), "could not send the request"};
   }

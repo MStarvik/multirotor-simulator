@@ -4,7 +4,8 @@ Defined in [`protocol/multirotor_sim/sim.h`](../protocol/multirotor_sim/sim.h). 
 process, including a flight controller, can use the simulator socket to draw in the
 viewers (position setpoints, planned trajectories, flown paths and so on) and to
 control the simulation (pause, reset, speed, stick inputs, adding and removing
-vehicles). `multirotor-sim-ctl` sends requests from the command line.
+vehicles). Viewers use it to follow the simulation. `multirotor-sim-ctl` sends
+requests from the command line.
 
 Frames and units follow the simulator's [conventions](../README.md#conventions):
 SI units, world frame NED, body frame FRD.
@@ -109,3 +110,33 @@ if (reply.status != SIM_OK) {
   fprintf(stderr, "could not pause: %s\n", reply.message);
 }
 ```
+
+## Viewing
+
+A viewer sends `SIM_CTL_SUBSCRIBE` (header only) once, and from then on is sent what
+it needs to show the simulation:
+
+- **`SIM_VIEW_VEHICLES`**: `sim_view_vehicles` (32 bytes: `roster_version`,
+  `count`), followed by `count` `sim_view_vehicle` (432 bytes each: `name`,
+  `controller`, `rotor_count`, `propeller_radius`, and each rotor's `position[3]`
+  and `spin`). All vehicles, right after subscribing and whenever one comes or goes;
+  `roster_version` increases with every change.
+- **Drawings**: everyone's, as `SIM_VIZ_MARKER`, `SIM_VIZ_PATH` and `SIM_VIZ_REMOVE`
+  messages like the ones clients send, but with `header.id` chosen by the simulator,
+  unique among all clients' drawings. Right after subscribing, every drawing there
+  is; then whatever changes.
+
+The simulator never waits for a subscriber. It sends the latest vehicles and
+drawings when the subscriber's socket has room, so a slow subscriber skips changes
+but catches up as soon as it reads again.
+
+Any client can ask for the state of the vehicles with `SIM_CTL_GET_STATE` (header
+only), which is always answered with `SIM_VIEW_STATE`, carrying the request's
+`header.id`: `sim_view_state` (48 bytes: `roster_version`, `time`,
+`real_time_factor`, `flags`, `count`), followed by `count`
+`sim_view_vehicle_state` (64 bytes each: `position[3]`, `attitude[4]`, `flags`).
+The vehicles are in the order of the `SIM_VIEW_VEHICLES` with the same
+`roster_version`, which a subscriber always gets first. `flags` has
+`SIM_VIEW_PAUSED` for the simulation, and `SIM_VIEW_WAITING` for a vehicle whose
+flight controller hasn't answered the current step. `multirotor-sim-viewer` asks
+once per frame and shows the latest answer.
