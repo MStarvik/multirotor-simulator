@@ -95,7 +95,7 @@ add_library(sim_ipc STATIC
   src/ipc/sitl_controller.cpp
   src/ipc/socket_directory.cpp
   src/ipc/unix_socket.cpp
-  src/ipc/viz_server.cpp)
+  src/ipc/sim_server.cpp)
 target_link_libraries(sim_ipc
   PUBLIC sim_runtime sim_protocol
   PRIVATE sim_build_options)
@@ -128,17 +128,23 @@ target_link_libraries(sitl-example-client PRIVATE sim_build_options sim_protocol
 # -----------------------------------------------------------------------------
 
 enable_testing()
+# Each simulator claims a socket directory, so each test gets its own.
+# Socket paths are limited to 107 bytes, so keep these short.
+set(test_sockets ${CMAKE_CURRENT_BINARY_DIR}/sockets)
 add_executable(sensor-test tests/sensor_test.cpp)
 target_link_libraries(sensor-test PRIVATE sim_build_options sim_core)
 add_test(NAME sensors COMMAND sensor-test)
-add_executable(viz-test tests/viz_test.cpp)
-target_link_libraries(viz-test PRIVATE sim_build_options sim_ipc)
-add_test(NAME viz-drawings COMMAND viz-test ${CMAKE_CURRENT_BINARY_DIR}/viz-test-sockets)
+add_executable(sim-server-test tests/sim_server_test.cpp)
+target_link_libraries(sim-server-test PRIVATE sim_build_options sim_ipc)
+add_test(NAME sim-server COMMAND sim-server-test ${test_sockets}/sim-server)
 # The headless executable flies a scripted flight and fails if the state diverges.
-add_test(NAME headless-quadrotor COMMAND multirotor-sim-headless)
-add_test(NAME headless-hexarotor COMMAND multirotor-sim-headless --rotors 6)
-add_test(NAME headless-octorotor COMMAND multirotor-sim-headless --rotors 8 --mass 2.5)
-add_test(NAME headless-three-vehicles COMMAND multirotor-sim-headless --vehicles 3)
+add_test(NAME headless-quadrotor COMMAND multirotor-sim-headless --socket-dir ${test_sockets}/quadrotor)
+add_test(NAME headless-hexarotor
+  COMMAND multirotor-sim-headless --rotors 6 --socket-dir ${test_sockets}/hexarotor)
+add_test(NAME headless-octorotor
+  COMMAND multirotor-sim-headless --rotors 8 --mass 2.5 --socket-dir ${test_sockets}/octorotor)
+add_test(NAME headless-three-vehicles
+  COMMAND multirotor-sim-headless --vehicles 3 --socket-dir ${test_sockets}/three-vehicles)
 # Lockstep over the SITL socket: the example client flies a circle and fails if it
 # tracks it poorly. The simulator runs in the background and ends the run.
 add_test(NAME sitl-lockstep
@@ -146,7 +152,7 @@ add_test(NAME sitl-lockstep
                   "$2" --socket-dir "$3"; client=$?
                   wait $simulator && exit $client]]
     sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:sitl-example-client>
-    ${CMAKE_CURRENT_BINARY_DIR}/sitl-test)
+    ${test_sockets}/sitl)
 # Two vehicles in lockstep, each with its own flight controller.
 add_test(NAME sitl-two-vehicles
   COMMAND sh -c [["$1" --sitl --vehicle alpha --vehicle bravo --socket-dir "$3" --duration 20 >/dev/null &
@@ -156,7 +162,7 @@ add_test(NAME sitl-two-vehicles
                   wait $alpha; alpha=$?
                   wait $simulator && [ $alpha -eq 0 ] && exit $bravo]]
     sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:sitl-example-client>
-    ${CMAKE_CURRENT_BINARY_DIR}/sitl-two-vehicles-test)
+    ${test_sockets}/pair)
 set_tests_properties(sitl-lockstep PROPERTIES TIMEOUT 60)
 
 # -----------------------------------------------------------------------------

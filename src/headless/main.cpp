@@ -5,12 +5,13 @@
 #include <cstdlib>
 #include <exception>
 #include <numbers>
-#include <optional>
 #include <print>
 #include <string>
+#include <utility>
 
 #include "app/setup.hpp"
 #include "control/demo_flight.hpp"
+#include "ipc/sim_server.hpp"
 #include "ipc/socket_directory.hpp"
 #include "runtime/options.hpp"
 #include "runtime/sim_runner.hpp"
@@ -42,20 +43,15 @@ void print_state(double time, const VehicleSnapshot& vehicle, const std::string&
 }
 
 int run(const Options& options) {
-  const MultirotorModel model = make_multirotor(options.frame);
   const ClockPolicy clock =
       options.realtime ? ClockPolicy{RealTime{.speed = options.speed}} : ClockPolicy{AsFastAsPossible{}};
-  // Only an external flight controller needs sockets. Without, any number of
-  // headless runs can go on at once, such as tests.
-  std::optional<ipc::SocketDirectory> sockets;
-  if (options.sitl) {
-    sockets.emplace(options.socket_directory);
-  }
-  SimRunner runner = app::make_runner(options, model, sockets ? &*sockets : nullptr, clock);
-
-  std::size_t name_width = 0;
-  if (options.vehicles.size() > 1) {
-    name_width = std::ranges::max(options.vehicles, {}, &std::string::size).size();
+  const ipc::SocketDirectory sockets{options.socket_directory};
+  SimRunner runner = app::make_runner(options, &sockets, clock);
+  const ipc::SimServer server{sockets.sim_socket(), runner};
+  // After the simulator socket, so that a flight controller that is already
+  // waiting finds it as soon as its SITL socket accepts it.
+  for (VehicleSpec& vehicle : app::initial_vehicles(options)) {
+    runner.add_vehicle(std::move(vehicle));
   }
 
   const auto wall_start = std::chrono::steady_clock::now();
@@ -65,11 +61,17 @@ int run(const Options& options) {
     demo_flight.run_until(runner, end);
 
     const Snapshot& snapshot = runner.latest();
+    const auto& vehicles = snapshot.roster->vehicles;
+    std::size_t name_width = 0;
+    if (vehicles.size() > 1) {
+      name_width = std::ranges::max(vehicles, {}, [](const VehicleSpec& v) { return v.name.size(); }).name.size();
+    }
     for (std::size_t i = 0; i < snapshot.vehicles.size(); ++i) {
       const VehicleState& state = snapshot.vehicles[i].state;
-      print_state(snapshot.time, snapshot.vehicles[i], options.vehicles[i], name_width);
+      const std::string& name = vehicles[i].name;
+      print_state(snapshot.time, snapshot.vehicles[i], name, name_width);
       if (!is_finite(state.position) || !is_finite(state.attitude)) {
-        std::println(stderr, "error: the simulation of vehicle {} diverged", options.vehicles[i]);
+        std::println(stderr, "error: the simulation of vehicle {} diverged", name);
         return EXIT_FAILURE;
       }
     }

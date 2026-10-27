@@ -14,7 +14,7 @@ the wall clock.
 ![The example SITL flight controller flying a circle](docs/media/circle.avif)
 
 *The example SITL flight controller flying a circle, drawing its position setpoint
-(yellow), planned path (magenta) and flown trail (cyan) over the visualization
+(yellow), planned path (magenta) and flown trail (cyan) over the simulator
 socket. Rendered offscreen with `multirotor-sim-record`.*
 
 ## Building
@@ -88,11 +88,11 @@ Each simulator keeps its sockets in a directory of its own, named by `--instance
 ```
 $XDG_RUNTIME_DIR/multirotor-sim/
 ├── default/
-│   ├── viz.sock          drawings, for the whole simulation
+│   ├── sim.sock          drawings and control, for the whole simulation
 │   └── vehicles/
 │       └── 0.sock        SITL, one per vehicle
 └── swarm-test/           a second simulator, started with --instance swarm-test
-    ├── viz.sock
+    ├── sim.sock
     └── vehicles/
         ├── alpha.sock
         └── bravo.sock
@@ -100,8 +100,7 @@ $XDG_RUNTIME_DIR/multirotor-sim/
 
 A simulator claims its directory while it runs and removes it when it exits, so
 listing `multirotor-sim/` shows what is running, and a second simulator with the
-same instance name fails to start. Headless runs without `--sitl` use no sockets, so
-any number can run at once.
+same instance name fails to start; give each its own `--instance`.
 
 `examples/sitl_client.c` is a complete SITL flight controller in C. It flies a
 circle from where its vehicle starts and draws its setpoint, plan and trail. It
@@ -122,7 +121,7 @@ takes `--instance`, `--socket-dir` and `--vehicle` like the simulator:
 same scene as the viewer offscreen, and encodes it with `ffmpeg`. Frames are taken
 at fixed steps of simulated time, so the video plays at real speed however long it
 took to render. It flies the scripted flight, or follows an external flight
-controller with `--sitl`, and shows drawings from the visualization socket.
+controller with `--sitl`, and shows drawings from the simulator socket.
 
 The output's extension picks the format: `.webm` for a VP9 video, or `.avif` for an
 animated AV1 image, which browsers play and loop on their own wherever images are
@@ -141,7 +140,7 @@ shown, such as in this README. The animation above was made with:
 | `src/sim` | Vehicle model, dynamics and sensors. No clocks, threads or graphics. |
 | `src/runtime` | Runs the simulation against a clock (real time, or unpaced) and publishes snapshots |
 | `src/control` | The built-in flight controller, used without `--sitl` |
-| `src/ipc` | The SITL and visualization sockets, and the directory that holds them |
+| `src/ipc` | The SITL and simulator sockets, and the directory that holds them |
 | `src/app` | Sets up the vehicles and their flight controllers from the options, for all programs |
 | `src/scene` | What is drawn for a snapshot, shared by the viewer and the recorder |
 | `src/platform`, `src/render` | Wayland window; Vulkan rendering to a window or offscreen |
@@ -163,5 +162,6 @@ directory, with their wire formats defined as C headers in `protocol/multirotor_
 
 - [SITL protocol](docs/sitl-protocol.md) (`vehicles/<name>.sock`): the lockstep
   exchange of sensor data and motor commands with each vehicle's flight controller.
-- [Visualization protocol](docs/viz-protocol.md) (`viz.sock`): markers and paths,
-  such as setpoints and planned trajectories, drawn in the viewer by any process.
+- [Simulator protocol](docs/sim-protocol.md) (`sim.sock`): markers and paths, such
+  as setpoints and planned trajectories, drawn in the viewer by any process; and
+  requests that control the simulation, such as pausing it.

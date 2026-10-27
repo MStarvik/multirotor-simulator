@@ -96,7 +96,6 @@ T parse_number(std::string_view option, std::string_view text) {
 std::optional<Options> parse_options(std::span<char* const> args) {
   Options options;
   options.vehicles.clear();
-  std::string_view follow;
   bool instance_given = false;
   const std::string_view program = args.empty() ? "multirotor-sim" : args.front();
 
@@ -144,7 +143,7 @@ std::optional<Options> parse_options(std::span<char* const> args) {
     } else if (option == "--camera-distance") {
       options.camera_distance = parse_number<double>(option, value());
     } else if (option == "--follow") {
-      follow = value();
+      options.follow = value();
     } else if (option == "--output") {
       options.output = value();
     } else if (option == "--fps") {
@@ -184,12 +183,8 @@ std::optional<Options> parse_options(std::span<char* const> args) {
       throw std::invalid_argument{std::format("there are two vehicles named '{}'", *i)};
     }
   }
-  if (!follow.empty()) {
-    const auto found = std::ranges::find(options.vehicles, follow);
-    if (found == options.vehicles.end()) {
-      throw std::invalid_argument{std::format("--follow: there is no vehicle named '{}'", follow)};
-    }
-    options.follow = static_cast<std::size_t>(found - options.vehicles.begin());
+  if (!options.follow.empty() && std::ranges::find(options.vehicles, options.follow) == options.vehicles.end()) {
+    throw std::invalid_argument{std::format("--follow: there is no vehicle named '{}'", options.follow)};
   }
 
   if (instance_given && !options.socket_directory.empty()) {

@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <chrono>
 #include <cmath>
 #include <csignal>
@@ -7,11 +8,12 @@
 #include <print>
 #include <stdexcept>
 #include <stop_token>
+#include <utility>
 
 #include "app/setup.hpp"
 #include "control/demo_flight.hpp"
 #include "ipc/socket_directory.hpp"
-#include "ipc/viz_server.hpp"
+#include "ipc/sim_server.hpp"
 #include "recorder/video_encoder.hpp"
 #include "render/offscreen_renderer.hpp"
 #include "render/vulkan_context.hpp"
@@ -37,10 +39,13 @@ int record(const runtime::Options& options) {
 
   const MultirotorModel model = make_multirotor(options.frame);
   const ipc::SocketDirectory sockets{options.socket_directory};
-  // Before the SITL sockets, so that a flight controller that is already waiting
-  // finds the drawing socket as soon as its SITL socket accepts it.
-  const ipc::VizServer viz_server{sockets.viz_socket()};
-  runtime::SimRunner runner = app::make_runner(options, model, &sockets, runtime::AsFastAsPossible{});
+  runtime::SimRunner runner = app::make_runner(options, &sockets, runtime::AsFastAsPossible{});
+  const ipc::SimServer server{sockets.sim_socket(), runner};
+  // After the simulator socket, so that a flight controller that is already
+  // waiting finds it as soon as its SITL socket accepts it.
+  for (runtime::VehicleSpec& vehicle : app::initial_vehicles(options)) {
+    runner.add_vehicle(std::move(vehicle));
+  }
 
   scene::SceneView scene{model, options.camera_distance};
   const render::VulkanContext vulkan;
@@ -58,9 +63,13 @@ int record(const runtime::Options& options) {
     } else {
       demo_flight.run_until(runner, time);
     }
-    scene.update_drawings(viz_server);
+    scene.update_drawings(server);
     const runtime::Snapshot& snapshot = runner.latest();
-    encoder.write(renderer.render(scene.frame(snapshot, options.follow, options.width, options.height)));
+    const auto& vehicles = snapshot.roster->vehicles;
+    const auto follow = static_cast<std::size_t>(
+        std::ranges::find(vehicles, options.follow, &runtime::VehicleSpec::name) - vehicles.begin());
+    encoder.write(renderer.render(scene.frame(snapshot, follow < vehicles.size() ? follow : 0, options.width,
+                                              options.height)));
   }
   encoder.finish();
 

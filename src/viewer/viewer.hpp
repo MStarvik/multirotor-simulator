@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-#include "ipc/viz_server.hpp"
+#include "ipc/sim_server.hpp"
 #include "platform/wayland/display.hpp"
 #include "platform/wayland/window.hpp"
 #include "render/renderer.hpp"
@@ -18,8 +18,7 @@
 namespace sim::viewer {
 
 struct ViewerSettings {
-  std::vector<std::string> vehicle_names;  // In the simulation's order.
-  std::size_t follow = 0;          // The vehicle followed at first.
+  std::string follow;              // The vehicle followed at first; empty for the first one.
   std::uint32_t msaa_samples = 4;  // Rounded down to what the GPU supports; 1 disables MSAA.
   double camera_distance = 2.4;    // From the follow camera to the vehicle, m.
 };
@@ -32,7 +31,7 @@ struct ViewerSettings {
 class Viewer {
  public:
   // Shows the drawings the server receives; it must outlive the viewer.
-  Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ipc::VizServer& viz_server,
+  Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ipc::SimServer& server,
          const ViewerSettings& settings);
 
   Viewer(const Viewer&) = delete;
@@ -55,13 +54,14 @@ class Viewer {
   };
 
   void handle_key(const platform::KeyEvent& event);
-  void follow_next_vehicle();
+  // The index of the followed vehicle, after switching to another if it is gone.
+  [[nodiscard]] std::size_t followed(const runtime::Roster& roster);
+  void follow_next_vehicle(const runtime::Roster& roster);
   [[nodiscard]] runtime::PilotInput pilot_input() const;
-  void update_title(const runtime::Snapshot& snapshot);
+  void update_title(const runtime::Snapshot& snapshot, std::size_t follow);
 
   runtime::SimRunner& runner_;
-  std::vector<std::string> vehicle_names_;
-  std::size_t follow_;
+  std::string follow_;  // The vehicle's name, which outlasts others coming and going.
   scene::SceneView scene_;
 
   // Declaration order matters: Vulkan objects must be destroyed before the
@@ -71,10 +71,11 @@ class Viewer {
   render::VulkanContext vulkan_;
   render::Renderer renderer_;
 
-  const ipc::VizServer& viz_server_;
+  const ipc::SimServer& server_;
 
   HeldKeys keys_;
   runtime::PilotInput sent_input_;  // To the followed vehicle.
+  bool follow_next_ = false;  // Tab was pressed.
   bool paused_ = false;
   bool quit_requested_ = false;
   std::chrono::steady_clock::time_point next_title_update_;

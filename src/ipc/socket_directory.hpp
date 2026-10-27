@@ -9,7 +9,7 @@ namespace sim::ipc {
 
 // The directory that holds one simulator's sockets:
 //
-//   <directory>/viz.sock              drawings, for the whole simulation
+//   <directory>/sim.sock              drawings and requests, for the whole simulation
 //   <directory>/vehicles/<name>.sock  SITL, one per vehicle
 //
 // Claims the directory for as long as it exists, so that two simulators can't
@@ -25,7 +25,7 @@ class SocketDirectory {
   SocketDirectory& operator=(const SocketDirectory&) = delete;
 
   [[nodiscard]] const std::filesystem::path& path() const { return directory_; }
-  [[nodiscard]] std::filesystem::path viz_socket() const { return directory_ / "viz.sock"; }
+  [[nodiscard]] std::filesystem::path sim_socket() const { return directory_ / "sim.sock"; }
   [[nodiscard]] std::filesystem::path vehicle_socket(std::string_view vehicle) const;
 
  private:

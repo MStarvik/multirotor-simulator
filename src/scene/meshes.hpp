@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ipc/viz_server.hpp"
+#include "ipc/sim_server.hpp"
 #include "render/scene.hpp"
 #include "sim/multirotor.hpp"
 

@@ -1,0 +1,95 @@
+# Simulator protocol
+
+Defined in [`protocol/multirotor_sim/sim.h`](../protocol/multirotor_sim/sim.h). Any
+process, including a flight controller, can use the simulator socket to draw in the
+viewers (position setpoints, planned trajectories, flown paths and so on) and to
+control the simulation (pause, reset, speed, stick inputs).
+
+Frames and units follow the simulator's [conventions](../README.md#conventions):
+SI units, world frame NED, body frame FRD.
+
+**Transport.** A UNIX domain socket of type `SOCK_SEQPACKET` at
+`<socket dir>/sim.sock`, one per simulator. It exists for as long as the simulator
+runs, and the simulator creates it before the SITL sockets, so a flight controller
+always finds it once its SITL socket has accepted it. Any number of clients may
+connect, and any client may send any message.
+
+Every message starts with
+`struct sim_header { uint32_t type; uint32_t version; uint32_t id; uint32_t reserved; }`,
+where `version` is `SIM_PROTOCOL_VERSION` (1). Malformed messages are dropped with a
+message on the simulator's stderr, or, for requests that ask for a reply, refused
+with `SIM_INVALID`.
+
+## Drawings
+
+Drawings are never answered. Send them with `MSG_DONTWAIT` and drop messages that
+would block, so that drawing can never stall a flight controller, and through it the
+simulation. The simulator reads the socket on its own thread, so this only matters
+when it falls far behind.
+
+Drawings are identified by `header.id`, chosen by the client. Each connection has
+its own ids, so flight controllers of different vehicles can use the same ones
+without clashing. Sending a drawing with an id that is in use replaces it, so moving
+a setpoint means sending it again. Drawings stay until removed, cleared, or until
+the connection that sent them closes, so a client must stay connected for as long
+as its drawings should show. Positions are in the world frame (NED, so height is
+−z), in meters; colors are linear RGB in [0, 1].
+
+| Type | Message | Effect |
+|---|---|---|
+| `SIM_VIZ_MARKER` | `sim_viz_marker` (48 bytes): `position[3]`, `color[3]`, `size` (diameter, m) | A point such as a setpoint: a diamond with a line down to the ground |
+| `SIM_VIZ_PATH` | `sim_viz_path` (40 bytes): `color[3]`, `width` (m), `point_count`; then `point_count` × 3 floats | A polyline such as a trajectory, at most 4096 points |
+| `SIM_VIZ_REMOVE` | header only | Removes this client's drawing with `header.id` |
+| `SIM_VIZ_CLEAR` | header only | Removes all of this client's drawings |
+
+Example, drawing a setpoint 2 m above the origin:
+
+```c
+struct sim_viz_marker marker = {
+    .header = {.type = SIM_VIZ_MARKER, .version = SIM_PROTOCOL_VERSION, .id = 1},
+    .position = {0.0f, 0.0f, -2.0f},
+    .color = {1.0f, 0.8f, 0.1f},
+    .size = 0.15f,
+};
+send(fd, &marker, sizeof marker, MSG_DONTWAIT | MSG_NOSIGNAL);
+```
+
+## Requests
+
+Requests change the simulation. Each is answered with a `sim_ctl_reply` (136 bytes)
+whose `header.id` is the request's, unless the request's `header.id` is 0, which
+asks for no reply. Match replies to requests by id: a request that is refused
+straight away can be answered before an earlier one that is still being applied. A
+client that asks for replies must read them, or they are dropped once its receive
+buffer is full.
+
+The reply's `status` is `SIM_OK`, or why the request failed: `SIM_INVALID`
+(malformed, or invalid values), `SIM_NOT_FOUND` (no such vehicle), `SIM_EXISTS`,
+`SIM_UNSUPPORTED` (this simulator can't do that) or `SIM_FAILED`. Its `message`
+explains a failure.
+
+Vehicles are named by a `char[32]` holding the vehicle's name, padded with NUL
+bytes.
+
+| Type | Message | Effect |
+|---|---|---|
+| `SIM_CTL_PAUSE` | `sim_ctl_pause` (24 bytes): `paused` (1 or 0) | Pauses or resumes the simulation |
+| `SIM_CTL_RESET` | header only | Puts every vehicle back where it started, and simulation time back to 0 |
+| `SIM_CTL_SET_SPEED` | `sim_ctl_set_speed` (24 bytes): `speed` | Speed relative to real time. `SIM_UNSUPPORTED` for a simulator that isn't paced to the clock, such as a headless one without `--realtime`. |
+| `SIM_CTL_PILOT_INPUT` | `sim_ctl_pilot_input` (80 bytes): `vehicle`, `sticks[4]` | Roll, pitch, yaw and throttle sticks in [−1, 1] for a vehicle's flight controller, until replaced. The built-in controller flies with them; an external one gets them in `sim_sitl_sensors.pilot`. |
+
+Example, pausing and checking the answer:
+
+```c
+struct sim_ctl_pause pause = {
+    .header = {.type = SIM_CTL_PAUSE, .version = SIM_PROTOCOL_VERSION, .id = 1},
+    .paused = 1,
+};
+send(fd, &pause, sizeof pause, MSG_NOSIGNAL);
+
+struct sim_ctl_reply reply;
+recv(fd, &reply, sizeof reply, 0);
+if (reply.status != SIM_OK) {
+  fprintf(stderr, "could not pause: %s\n", reply.message);
+}
+```

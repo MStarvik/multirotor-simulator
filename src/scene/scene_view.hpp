@@ -6,7 +6,7 @@
 #include <span>
 #include <vector>
 
-#include "ipc/viz_server.hpp"
+#include "ipc/sim_server.hpp"
 #include "render/scene.hpp"
 #include "runtime/sim_runner.hpp"
 #include "sim/multirotor.hpp"
@@ -25,10 +25,11 @@ class SceneView {
   [[nodiscard]] std::span<const render::Mesh> meshes() const { return meshes_; }
 
   // Rebuilds the drawings' geometry if they changed since the last call.
-  void update_drawings(const ipc::VizServer& server);
+  void update_drawings(const ipc::SimServer& server);
 
-  // The frame to render for a snapshot, with the camera following vehicle `follow`,
-  // for an image of the given size. It refers to data in this object, so it stays
+  // The frame to render for a snapshot, with the camera following vehicle `follow`
+  // (or looking at the origin if there is no such vehicle), for an image of the
+  // given size. It refers to data in this object, so it stays
   // valid until the next call.
   [[nodiscard]] render::FrameView frame(const runtime::Snapshot& snapshot, std::size_t follow,
                                         std::uint32_t width, std::uint32_t height);

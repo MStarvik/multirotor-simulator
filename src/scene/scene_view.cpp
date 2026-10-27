@@ -34,30 +34,30 @@ SceneView::SceneView(const MultirotorModel& model, double camera_distance)
     : meshes_{make_ground_mesh(ground_tile_size, ground_tiles_per_side), make_multirotor_mesh(model)},
       camera_offset_{camera_distance * normalized(camera_direction)} {}
 
-void SceneView::update_drawings(const ipc::VizServer& server) {
-  if (server.version() == drawings_version_) {
+void SceneView::update_drawings(const ipc::SimServer& server) {
+  if (server.drawings_version() == drawings_version_) {
     return;
   }
-  const ipc::VizScene scene = server.scene();
+  const ipc::VizScene scene = server.drawings();
   drawings_version_ = scene.version;
   drawing_vertices_ = make_drawings_mesh(scene).vertices;
 }
 
 render::FrameView SceneView::frame(const runtime::Snapshot& snapshot, std::size_t follow,
                                    std::uint32_t width, std::uint32_t height) {
-  const VehicleState& vehicle = snapshot.vehicles.at(follow).state;
+  const Vec3 target = follow < snapshot.vehicles.size() ? snapshot.vehicles[follow].state.position : Vec3{};
   const double aspect = static_cast<double>(width) / static_cast<double>(height);
 
-  Vec3 eye = vehicle.position + camera_offset_;
+  Vec3 eye = target + camera_offset_;
   eye.z = std::min(eye.z, -min_camera_height);
   const Mat4 view_projection = multiply(perspective(vertical_fov, aspect, near_plane, far_plane),
-                                        look_at(eye, vehicle.position, {0.0, 0.0, -1.0}));
+                                        look_at(eye, target, {0.0, 0.0, -1.0}));
 
   // The ground is finite, so keep it centered under the followed vehicle. Moving it
   // in steps of two tiles keeps the checker pattern in place.
   const double ground_step = 2.0 * ground_tile_size;
-  const Vec3 ground_offset{std::round(vehicle.position.x / ground_step) * ground_step,
-                           std::round(vehicle.position.y / ground_step) * ground_step, 0.0};
+  const Vec3 ground_offset{std::round(target.x / ground_step) * ground_step,
+                           std::round(target.y / ground_step) * ground_step, 0.0};
 
   items_.clear();
   items_.push_back({.mesh = ground_mesh, .model = translation(ground_offset)});

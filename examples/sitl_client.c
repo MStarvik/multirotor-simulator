@@ -2,7 +2,7 @@
 //
 // Connects to a vehicle's SITL socket, flies a circle from where the vehicle
 // starts, and draws the position setpoint, the planned circle and the flown trail
-// on the viz socket. When the simulation ends, it prints the RMS position error and
+// on the simulator socket. When the simulation ends, it prints the RMS position error and
 // fails if it is large, so it doubles as an end-to-end test.
 //
 // For brevity it controls position from the ground truth that the simulator sends
@@ -25,7 +25,7 @@
 #include <unistd.h>
 
 #include <multirotor_sim/sitl.h>
-#include <multirotor_sim/viz.h>
+#include <multirotor_sim/sim.h>
 
 constexpr double gravity = 9.80665;  // m/s²
 constexpr double pi = 3.14159265358979323846;
@@ -166,44 +166,33 @@ static int connect_to(const char* path, int attempts) {
   }
 }
 
-// The connection to the viewer's drawing socket. It only exists while a viewer runs,
-// which may start after us or restart, so connect whenever it is there.
-typedef struct viz_connection {
-  const char* path;
-  int fd;               // -1 while not connected.
-  double next_attempt;  // Monotonic time of the next connection attempt, s.
-} viz_connection;
-
-static double monotonic_seconds(void) {
-  struct timespec now;
-  clock_gettime(CLOCK_MONOTONIC, &now);
-  return (double)now.tv_sec + (double)now.tv_nsec * 1e-9;
-}
+// The connection to the simulator socket, for drawing; -1 if there is none.
+static int viz = -1;
 
 // Drawing is best effort: never block, and drop messages that would. Any other
-// failure means the viewer has gone away.
-static void send_drawing(viz_connection* viz, const void* message, size_t size) {
-  if (viz->fd >= 0 && send(viz->fd, message, size, MSG_DONTWAIT | MSG_NOSIGNAL) < 0 && errno != EAGAIN) {
-    close(viz->fd);
-    viz->fd = -1;
+// failure means the simulator has gone away, which the SITL socket also notices.
+static void send_drawing(const void* message, size_t size) {
+  if (viz >= 0 && send(viz, message, size, MSG_DONTWAIT | MSG_NOSIGNAL) < 0 && errno != EAGAIN) {
+    close(viz);
+    viz = -1;
   }
 }
 
-static void send_marker(viz_connection* viz, uint32_t id, vec3 position, const float color[3], float size) {
+static void send_marker(uint32_t id, vec3 position, const float color[3], float size) {
   struct sim_viz_marker marker = {
-      .header = {.type = SIM_VIZ_MARKER, .version = SIM_VIZ_PROTOCOL_VERSION, .id = id},
+      .header = {.type = SIM_VIZ_MARKER, .version = SIM_PROTOCOL_VERSION, .id = id},
       .position = {(float)position.x, (float)position.y, (float)position.z},
       .color = {color[0], color[1], color[2]},
       .size = size,
   };
-  send_drawing(viz, &marker, sizeof marker);
+  send_drawing(&marker, sizeof marker);
 }
 
-static void send_path(viz_connection* viz, uint32_t id, const float points[][3], uint32_t count,
+static void send_path(uint32_t id, const float points[][3], uint32_t count,
                       const float color[3], float width) {
   static unsigned char buffer[sizeof(struct sim_viz_path) + SIM_VIZ_MAX_PATH_POINTS * 3 * sizeof(float)];
   const struct sim_viz_path path = {
-      .header = {.type = SIM_VIZ_PATH, .version = SIM_VIZ_PROTOCOL_VERSION, .id = id},
+      .header = {.type = SIM_VIZ_PATH, .version = SIM_PROTOCOL_VERSION, .id = id},
       .color = {color[0], color[1], color[2]},
       .width = width,
       .point_count = count,
@@ -211,10 +200,10 @@ static void send_path(viz_connection* viz, uint32_t id, const float points[][3],
   const size_t points_size = (size_t)count * 3 * sizeof(float);
   memcpy(buffer, &path, sizeof path);
   memcpy(buffer + sizeof path, points, points_size);
-  send_drawing(viz, buffer, sizeof path + points_size);
+  send_drawing(buffer, sizeof path + points_size);
 }
 
-static void send_planned_circle(viz_connection* viz, vec3 start) {
+static void send_planned_circle(vec3 start) {
   constexpr unsigned segments = 96;
   static float points[segments + 1][3];
   for (unsigned i = 0; i <= segments; ++i) {
@@ -223,22 +212,7 @@ static void send_planned_circle(viz_connection* viz, vec3 start) {
     points[i][1] = (float)point.position.y;
     points[i][2] = (float)point.position.z;
   }
-  send_path(viz, 2, points, segments + 1, (const float[3]){0.85f, 0.15f, 0.75f}, 0.03f);
-}
-
-// Connects to the drawing socket if not connected, trying at most once a second. A
-// viewer starts without drawings, so the lasting ones are sent on every connect.
-// Drawing ids are our own, so they can't clash with another client's.
-static void maintain_viz_connection(viz_connection* viz, vec3 start) {
-  if (viz->fd >= 0 || monotonic_seconds() < viz->next_attempt) {
-    return;
-  }
-  viz->next_attempt = monotonic_seconds() + 1.0;
-  viz->fd = connect_to(viz->path, 1);
-  if (viz->fd >= 0) {
-    printf("Drawing in the viewer\n");
-    send_planned_circle(viz, start);
-  }
+  send_path(2, points, segments + 1, (const float[3]){0.85f, 0.15f, 0.75f}, 0.03f);
 }
 
 static void usage_error(const char* program) {
@@ -277,7 +251,7 @@ int main(int argc, char** argv) {
   char sitl_path[320];
   char viz_path[300];
   snprintf(sitl_path, sizeof sitl_path, "%s/vehicles/%s.sock", directory, vehicle_name);
-  snprintf(viz_path, sizeof viz_path, "%s/viz.sock", directory);
+  snprintf(viz_path, sizeof viz_path, "%s/sim.sock", directory);
 
   // The simulator may still be starting, so keep trying for a while.
   const int sitl = connect_to(sitl_path, 100);
@@ -286,7 +260,8 @@ int main(int argc, char** argv) {
     return EXIT_FAILURE;
   }
   printf("Connected to %s\n", sitl_path);
-  viz_connection viz = {.path = viz_path, .fd = -1, .next_attempt = 0.0};
+  // The simulator creates its socket before the SITL sockets, so it's there.
+  viz = connect_to(viz_path, 1);
 
   struct sim_sitl_hello vehicle;
   if (recv(sitl, &vehicle, sizeof vehicle, 0) != sizeof vehicle || vehicle.header.type != SIM_SITL_HELLO ||
@@ -321,6 +296,7 @@ int main(int argc, char** argv) {
     if (!started) {
       start = from_array(sensors.truth.position);
       started = true;
+      send_planned_circle(start);
     }
 
     const double time = (double)sensors.time_ns * 1e-9;
@@ -343,10 +319,9 @@ int main(int argc, char** argv) {
     }
 
     // Draw at 50 Hz of simulated time, and extend the trail at 10 Hz.
-    maintain_viz_connection(&viz, start);
     const uint64_t step_ms = vehicle.step_ns / 1'000'000 > 0 ? vehicle.step_ns / 1'000'000 : 1;
     if (sensors.sequence % (20 / step_ms) == 0) {
-      send_marker(&viz, 1, target.position, (const float[3]){1.0f, 0.8f, 0.1f}, 0.15f);
+      send_marker(1, target.position, (const float[3]){1.0f, 0.8f, 0.1f}, 0.15f);
     }
     if (sensors.sequence % (100 / step_ms) == 0) {
       if (trail_length == trail_capacity) {
@@ -357,7 +332,7 @@ int main(int argc, char** argv) {
       trail[trail_length][1] = (float)position.y;
       trail[trail_length][2] = (float)position.z;
       ++trail_length;
-      send_path(&viz, 3, trail, trail_length, (const float[3]){0.1f, 0.9f, 0.9f}, 0.02f);
+      send_path(3, trail, trail_length, (const float[3]){0.1f, 0.9f, 0.9f}, 0.02f);
     }
   }
 

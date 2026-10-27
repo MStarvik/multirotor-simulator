@@ -3,10 +3,11 @@
 #include <exception>
 #include <print>
 #include <thread>
+#include <utility>
 
 #include "app/setup.hpp"
 #include "ipc/socket_directory.hpp"
-#include "ipc/viz_server.hpp"
+#include "ipc/sim_server.hpp"
 #include "runtime/options.hpp"
 #include "runtime/sim_runner.hpp"
 #include "sim/multirotor.hpp"
@@ -21,14 +22,16 @@ int main(int argc, char** argv) {
 
     const sim::MultirotorModel model = sim::make_multirotor(options->frame);
     const sim::ipc::SocketDirectory sockets{options->socket_directory};
-    // Before the SITL sockets, so that a flight controller that is already waiting
-    // finds the drawing socket as soon as its SITL socket accepts it.
-    const sim::ipc::VizServer viz_server{sockets.viz_socket()};
     sim::runtime::SimRunner runner =
-        sim::app::make_runner(*options, model, &sockets, sim::runtime::RealTime{.speed = options->speed});
-    sim::viewer::Viewer viewer{runner, model, viz_server,
-                               {.vehicle_names = options->vehicles,
-                                .follow = options->follow,
+        sim::app::make_runner(*options, &sockets, sim::runtime::RealTime{.speed = options->speed});
+    const sim::ipc::SimServer server{sockets.sim_socket(), runner};
+    // After the simulator socket, so that a flight controller that is already
+    // waiting finds it as soon as its SITL socket accepts it.
+    for (sim::runtime::VehicleSpec& vehicle : sim::app::initial_vehicles(*options)) {
+      runner.add_vehicle(std::move(vehicle));
+    }
+    sim::viewer::Viewer viewer{runner, model, server,
+                               {.follow = options->follow,
                                 .msaa_samples = options->msaa_samples,
                                 .camera_distance = options->camera_distance}};
 

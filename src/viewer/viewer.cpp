@@ -1,8 +1,10 @@
 #include "viewer/viewer.hpp"
 
+#include <algorithm>
 #include <format>
 #include <stdexcept>
 #include <string>
+#include <utility>
 
 #include <xkbcommon/xkbcommon-keysyms.h>
 #include <xkbcommon/xkbcommon.h>
@@ -18,20 +20,16 @@ vk::Extent2D to_vk(platform::Extent extent) {
 
 }  // namespace
 
-Viewer::Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ipc::VizServer& viz_server,
+Viewer::Viewer(runtime::SimRunner& runner, const MultirotorModel& model, const ipc::SimServer& server,
                const ViewerSettings& settings)
     : runner_{runner},
-      vehicle_names_{settings.vehicle_names},
       follow_{settings.follow},
       scene_{model, settings.camera_distance},
       window_{display_, "Multirotor Simulator", "multirotor-sim"},
       vulkan_{display_.native(), window_.surface()},
       renderer_{vulkan_, to_vk(window_.framebuffer_extent()), settings.msaa_samples, scene_.meshes()},
-      viz_server_{viz_server} {
+      server_{server} {
   window_.apply_scale();
-  if (vehicle_names_.size() != runner_.vehicle_count() || follow_ >= vehicle_names_.size()) {
-    throw std::invalid_argument{"the viewer needs a name for each vehicle, and one to follow"};
-  }
 
   if (auto* seat = display_.seat()) {
     seat->on_key = [this](const platform::KeyEvent& event) { handle_key(event); };
@@ -50,19 +48,23 @@ void Viewer::run() {
       window_.apply_scale();
     }
 
-    if (const runtime::PilotInput input = pilot_input(); input != sent_input_) {
+    const runtime::Snapshot& snapshot = runner_.latest();
+    if (std::exchange(follow_next_, false)) {
+      follow_next_vehicle(*snapshot.roster);
+    }
+    const std::size_t follow = followed(*snapshot.roster);
+    if (const runtime::PilotInput input = pilot_input(); input != sent_input_ && !follow_.empty()) {
       runner_.push(runtime::SetPilotInput{.vehicle = follow_, .input = input});
       sent_input_ = input;
     }
 
-    scene_.update_drawings(viz_server_);
-    const runtime::Snapshot& snapshot = runner_.latest();
+    scene_.update_drawings(server_);
     paused_ = snapshot.paused;
-    update_title(snapshot);
+    update_title(snapshot, follow);
     // Presentation is FIFO, so this blocks at the display's refresh rate. That only
     // slows down this loop; the simulation runs on its own thread.
     const vk::Extent2D extent = renderer_.extent();
-    renderer_.draw_frame(scene_.frame(snapshot, follow_, extent.width, extent.height));
+    renderer_.draw_frame(scene_.frame(snapshot, follow, extent.width, extent.height));
   }
 }
 
@@ -82,7 +84,7 @@ void Viewer::handle_key(const platform::KeyEvent& event) {
         sent_input_ = {};  // The controller forgets its input on reset.
         return;
       case XKB_KEY_Tab:
-        follow_next_vehicle();
+        follow_next_ = true;  // Done with the next snapshot, which has the current vehicles.
         return;
       default:
         break;
@@ -102,14 +104,29 @@ void Viewer::handle_key(const platform::KeyEvent& event) {
   }
 }
 
-void Viewer::follow_next_vehicle() {
-  // Let go of the sticks of the vehicle left behind. The next loop sends the held
-  // keys to the new one.
-  if (sent_input_ != runtime::PilotInput{}) {
-    runner_.push(runtime::SetPilotInput{.vehicle = follow_, .input = {}});
-    sent_input_ = {};
+std::size_t Viewer::followed(const runtime::Roster& roster) {
+  const auto& vehicles = roster.vehicles;
+  const auto found = std::ranges::find(vehicles, follow_, &runtime::VehicleSpec::name);
+  if (found != vehicles.end()) {
+    return static_cast<std::size_t>(found - vehicles.begin());
   }
-  follow_ = (follow_ + 1) % vehicle_names_.size();
+  // Gone, or not chosen yet: follow the first, if there is any.
+  follow_ = vehicles.empty() ? std::string{} : vehicles.front().name;
+  sent_input_ = {};
+  return 0;
+}
+
+void Viewer::follow_next_vehicle(const runtime::Roster& roster) {
+  if (roster.vehicles.empty()) {
+    return;
+  }
+  // Let go of the sticks of the vehicle left behind. The held keys are sent to the
+  // new one right after.
+  if (sent_input_ != runtime::PilotInput{} && !follow_.empty()) {
+    runner_.push(runtime::SetPilotInput{.vehicle = follow_, .input = {}});
+  }
+  sent_input_ = {};
+  follow_ = roster.vehicles[(followed(roster) + 1) % roster.vehicles.size()].name;
 }
 
 runtime::PilotInput Viewer::pilot_input() const {
@@ -122,7 +139,7 @@ runtime::PilotInput Viewer::pilot_input() const {
   };
 }
 
-void Viewer::update_title(const runtime::Snapshot& snapshot) {
+void Viewer::update_title(const runtime::Snapshot& snapshot, std::size_t follow) {
   const auto now = std::chrono::steady_clock::now();
   if (now < next_title_update_) {
     return;
@@ -138,7 +155,7 @@ void Viewer::update_title(const runtime::Snapshot& snapshot) {
     std::string waiting;
     for (std::size_t i = 0; i < snapshot.vehicles.size(); ++i) {
       if (snapshot.vehicles[i].waiting_for_controller) {
-        waiting += std::format("{}{}", waiting.empty() ? "" : ", ", vehicle_names_[i]);
+        waiting += std::format("{}{}", waiting.empty() ? "" : ", ", snapshot.roster->vehicles[i].name);
       }
     }
     if (!waiting.empty()) {
@@ -146,12 +163,19 @@ void Viewer::update_title(const runtime::Snapshot& snapshot) {
     }
   }
   // Only name the vehicle when there is a choice.
-  const std::string vehicle = vehicle_names_.size() > 1 ? std::format("vehicle {}, ", vehicle_names_[follow_]) : "";
+  std::string vehicle;
+  if (follow < snapshot.vehicles.size()) {
+    if (snapshot.vehicles.size() > 1) {
+      vehicle = std::format("vehicle {}, ", follow_);
+    }
+    // 0.0 - z avoids printing -0.00.
+    vehicle += std::format("altitude {:.2f} m, ", 0.0 - snapshot.vehicles[follow].state.position.z);
+  }
   const vk::Extent2D extent = renderer_.extent();
   window_.set_title(std::format(
-      "Multirotor Simulator — {}{:.1f} s, altitude {:.2f} m, {:.2f}× real time{} | {}×{}, {}× MSAA, GPU {:.3f} ms",
-      vehicle, snapshot.time, 0.0 - snapshot.vehicles[follow_].state.position.z,  // Avoids printing -0.00.
-      snapshot.real_time_factor, status, extent.width, extent.height, renderer_.msaa_samples(), gpu_time_ms_));
+      "Multirotor Simulator — {}{:.1f} s, {:.2f}× real time{} | {}×{}, {}× MSAA, GPU {:.3f} ms", vehicle,
+      snapshot.time, snapshot.real_time_factor, status, extent.width, extent.height, renderer_.msaa_samples(),
+      gpu_time_ms_));
 }
 
 }  // namespace sim::viewer

@@ -24,7 +24,7 @@ struct Options {
   double speed = 1.0;      // Simulation speed relative to real time.
   std::uint32_t msaa_samples = 4;  // Viewer only: anti-aliasing samples per pixel.
   double camera_distance = 2.4;    // Viewer only: follow camera distance, m.
-  std::size_t follow = 0;          // Viewer and recorder: the vehicle the camera follows.
+  std::string follow;              // Viewer and recorder: the vehicle the camera follows; empty for the first.
   bool realtime = false;   // Headless only: pace to the wall clock.
   double duration = 10.0;  // Headless and recorder: simulated seconds to run.
   std::filesystem::path output;  // Recorder only: the video file to write.
