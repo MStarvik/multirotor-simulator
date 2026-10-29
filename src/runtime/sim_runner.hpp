@@ -21,11 +21,6 @@
 
 namespace sim::runtime {
 
-enum class ControllerKind {
-  built_in,  // The simulator's own attitude controller, flown with the sticks.
-  sitl,      // An external flight controller on the vehicle's SITL socket.
-};
-
 // Instance and vehicle names become part of socket paths, which are short: up to
 // max_name_length letters, digits, '-', '_' and '.', not starting with '.'.
 inline constexpr std::size_t max_name_length = 32;
@@ -39,7 +34,6 @@ struct VehicleSpec {
   std::string name;  // Unique in the simulation; names the vehicle's SITL socket.
   MultirotorModel model;
   VehicleState initial_state;  // Also where a reset puts it.
-  ControllerKind controller = ControllerKind::built_in;
 };
 
 // The vehicles in the simulation. Replaced, never changed, when vehicles come or go,
@@ -97,8 +91,8 @@ struct SetPaused {
 struct SetSpeed {
   double speed;
 };
-// Adds a vehicle, which stays until removed. One with an external flight controller
-// holds the simulation until that connects.
+// Adds a vehicle, which stays until removed. If its flight controller is external,
+// it holds the simulation until that connects.
 struct SpawnVehicle {
   VehicleSpec vehicle;
 };
@@ -129,7 +123,8 @@ using Completion = std::function<void(const CommandResult&)>;
 struct RealTime {
   double speed = 1.0;
 };
-// Steps run back to back, as fast as the CPU allows.
+// Steps run back to back, as fast as the CPU and the flight controllers allow.
+// Without vehicles, the simulation waits for one rather than racing ahead.
 struct AsFastAsPossible {};
 using ClockPolicy = std::variant<RealTime, AsFastAsPossible>;
 
@@ -140,10 +135,9 @@ using ControllerFactory = std::function<std::unique_ptr<FlightController>(const 
 // step is taken once every flight controller has answered it, so an external one
 // that is slow or not yet connected holds the whole simulation.
 //
-// run() executes on one thread (a dedicated one with a viewer, or the main thread
-// when headless). Other threads may push() commands, which are applied between
-// steps. Snapshots are published after every step, to latest() and to any other
-// readers, each of which one thread may read.
+// run() executes on one thread. Other threads may push() commands, which are
+// applied between steps. Snapshots are published after every step, to latest() and
+// to any other readers, each of which one thread may read.
 class SimRunner {
  public:
   SimRunner(double step_size, std::uint64_t seed, ControllerFactory make_controller, ClockPolicy clock);

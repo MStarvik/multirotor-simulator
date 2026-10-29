@@ -114,35 +114,31 @@ struct sim_ctl_set_speed {
   double speed;  // Relative to real time, > 0.
 };
 
-// Stick inputs for a vehicle's flight controller: the built-in one flies with them,
-// and an external one gets them in sim_sitl_sensors.pilot. They stay until replaced.
+// Stick inputs for a vehicle's flight controller, which gets them in
+// sim_sitl_sensors.pilot. They stay until replaced.
 struct sim_ctl_pilot_input {
   struct sim_header header;
   char vehicle[SIM_NAME_SIZE];
   double sticks[4];  // Roll (+ right), pitch (+ forward), yaw (+ clockwise), throttle (+ up), in [-1, 1].
 };
 
-enum sim_controller : uint32_t {
-  SIM_CONTROLLER_BUILT_IN = 0,  // The simulator's own, flown with SIM_CTL_PILOT_INPUT.
-  SIM_CONTROLLER_SITL = 1,      // External, on <socket dir>/vehicles/<name>.sock.
-};
-
 // Adds a vehicle, generated as a symmetric frame like the simulator's own, which
-// stays until removed. The frame fields left at 0 take the simulator's values. A
-// vehicle with an external flight controller holds the whole simulation until one
-// connects to its SITL socket, which exists once the reply has been sent.
+// stays until removed. The frame fields left at 0 take the simulator's values. Like
+// every vehicle, it holds the whole simulation until a flight controller connects to
+// its SITL socket, <socket dir>/vehicles/<name>.sock, which exists once the reply
+// has been sent.
 struct sim_ctl_spawn_vehicle {
   struct sim_header header;
   char name[SIM_NAME_SIZE];  // Unique in the simulation.
-  uint32_t controller;       // enum sim_controller
   uint32_t rotor_count;      // Even, 4 to 12.
+  uint32_t reserved;
   double arm_length;         // From the center to each rotor, m.
   double mass;               // kg
   double position[3];        // Where it starts, and where a reset puts it. World frame, m; z <= 0.
   double yaw;                // Heading, rad clockwise from north.
 };
 
-// Removes a vehicle. An external flight controller sees its SITL socket close.
+// Removes a vehicle. Its flight controller sees its SITL socket close.
 struct sim_ctl_remove_vehicle {
   struct sim_header header;
   char name[SIM_NAME_SIZE];
@@ -202,8 +198,8 @@ struct sim_view_rotor {
 
 struct sim_view_vehicle {
   char name[SIM_NAME_SIZE];
-  uint32_t controller;  // enum sim_controller
   uint32_t rotor_count;
+  uint32_t reserved;
   double propeller_radius;  // m
   struct sim_view_rotor rotors[SIM_MAX_ROTORS];
 };

@@ -72,12 +72,11 @@ target_link_libraries(sim_runtime
   PRIVATE sim_build_options)
 
 # -----------------------------------------------------------------------------
-# Control: built-in flight controller, used until a real one is connected
+# Control: the attitude controller that multirotor-sim-pilot flies with
 # -----------------------------------------------------------------------------
 
 add_library(sim_control STATIC
   src/control/attitude_controller.cpp
-  src/control/demo_flight.cpp
   src/control/mixer.cpp)
 target_link_libraries(sim_control
   PUBLIC sim_runtime
@@ -109,21 +108,21 @@ target_link_libraries(sim_ipc
 add_library(sim_app STATIC src/app/setup.cpp)
 target_link_libraries(sim_app
   PUBLIC sim_ipc sim_runtime
-  PRIVATE sim_build_options sim_control)
+  PRIVATE sim_build_options)
 
 # -----------------------------------------------------------------------------
-# Headless executable: no window, no GPU
-# -----------------------------------------------------------------------------
-
-add_executable(multirotor-sim-headless src/headless/main.cpp)
-target_link_libraries(multirotor-sim-headless PRIVATE sim_build_options sim_app sim_control sim_ipc)
-
-# -----------------------------------------------------------------------------
-# Simulator executable: paced to the wall clock, and opens a viewer
+# Simulator executable: no window or GPU; can open a viewer
 # -----------------------------------------------------------------------------
 
 add_executable(multirotor-sim src/simulator/main.cpp)
 target_link_libraries(multirotor-sim PRIVATE sim_build_options sim_app sim_ipc)
+
+# -----------------------------------------------------------------------------
+# Pilot: flies vehicles over their SITL sockets, with the sticks or a script
+# -----------------------------------------------------------------------------
+
+add_executable(multirotor-sim-pilot src/pilot/main.cpp)
+target_link_libraries(multirotor-sim-pilot PRIVATE sim_build_options sim_control sim_ipc)
 
 # -----------------------------------------------------------------------------
 # Command-line tool sending requests to a running simulator
@@ -153,32 +152,40 @@ add_test(NAME sensors COMMAND sensor-test)
 add_executable(sim-server-test tests/sim_server_test.cpp)
 target_link_libraries(sim-server-test PRIVATE sim_build_options sim_ipc)
 add_test(NAME sim-server COMMAND sim-server-test ${test_sockets}/sim-server)
-# The headless executable flies a scripted flight and fails if the state diverges.
-add_test(NAME headless-quadrotor COMMAND multirotor-sim-headless --socket-dir ${test_sockets}/quadrotor)
-add_test(NAME headless-hexarotor
-  COMMAND multirotor-sim-headless --rotors 6 --socket-dir ${test_sockets}/hexarotor)
-add_test(NAME headless-octorotor
-  COMMAND multirotor-sim-headless --rotors 8 --mass 2.5 --socket-dir ${test_sockets}/octorotor)
-add_test(NAME headless-three-vehicles
-  COMMAND multirotor-sim-headless --vehicles 3 --socket-dir ${test_sockets}/three-vehicles)
+# The pilot flies the demo flight in an unpaced simulator, and both fail if the state
+# diverges. The rest of the arguments go to both. A simulator whose pilot has failed
+# would wait for it forever, so it is stopped.
+function(add_demo_test name sockets)
+  add_test(NAME ${name}
+    COMMAND sh -c [[simulator=$1 pilot=$2 sockets=$3; shift 3
+                    "$simulator" --unpaced --duration 10 --socket-dir "$sockets" "$@" >/dev/null & pid=$!
+                    if "$pilot" --demo --socket-dir "$sockets" "$@"; then wait $pid; exit; fi
+                    kill $pid; wait $pid; exit 1]]
+      sh $<TARGET_FILE:multirotor-sim> $<TARGET_FILE:multirotor-sim-pilot> ${test_sockets}/${sockets} ${ARGN})
+endfunction()
+add_demo_test(demo-quadrotor quadrotor)
+add_demo_test(demo-hexarotor hexarotor --rotors 6)
+add_demo_test(demo-octorotor octorotor --rotors 8 --mass 2.5)
+add_demo_test(demo-three-vehicles three-vehicles --vehicles 3)
 # Lockstep over the SITL socket: the example client flies a circle and fails if it
 # tracks it poorly. The simulator runs in the background and ends the run.
 add_test(NAME sitl-lockstep
-  COMMAND sh -c [["$1" --sitl --socket-dir "$3" --duration 20 >/dev/null & simulator=$!
+  COMMAND sh -c [["$1" --unpaced --socket-dir "$3" --duration 20 >/dev/null & simulator=$!
                   "$2" --socket-dir "$3"; client=$?
                   wait $simulator && exit $client]]
-    sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:sitl-example-client>
+    sh $<TARGET_FILE:multirotor-sim> $<TARGET_FILE:sitl-example-client>
     ${test_sockets}/sitl)
 # Vehicles and obstacles added and removed while the simulator runs, through its
-# socket.
+# socket. Without flight controllers, the simulation holds, but requests are still
+# applied.
 add_test(NAME spawn-and-remove
   COMMAND sh -c [[tool=$2 sockets=$3
-                  "$1" --realtime --duration 30 --socket-dir "$sockets" >/dev/null & simulator=$!
+                  "$1" --socket-dir "$sockets" >/dev/null & simulator=$!
                   ctl() { "$tool" --socket-dir "$sockets" "$@"; }
                   sleep 0.5
                   ctl spawn alpha --at 0,5 --rotors 6 &&
                   ! ctl spawn alpha 2>/dev/null &&
-                  ctl spawn bravo --sitl --at 0,-5 && [ -S "$sockets/vehicles/bravo.sock" ] &&
+                  ctl spawn bravo --at 0,-5 && [ -S "$sockets/vehicles/bravo.sock" ] &&
                   ctl remove bravo && [ ! -e "$sockets/vehicles/bravo.sock" ] &&
                   ctl remove alpha && ! ctl remove alpha 2>/dev/null &&
                   ! ctl spawn charlie --rotors 5 2>/dev/null &&
@@ -189,16 +196,16 @@ add_test(NAME spawn-and-remove
                   ctl remove-obstacle pole && ! ctl remove-obstacle pole 2>/dev/null &&
                   ctl speed 2 && ctl pause && ctl resume && ctl reset; result=$?
                   kill $simulator; wait $simulator; exit $result]]
-    sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:multirotor-sim-ctl> ${test_sockets}/spawn)
+    sh $<TARGET_FILE:multirotor-sim> $<TARGET_FILE:multirotor-sim-ctl> ${test_sockets}/spawn)
 # Two vehicles in lockstep, each with its own flight controller.
 add_test(NAME sitl-two-vehicles
-  COMMAND sh -c [["$1" --sitl --vehicle alpha --vehicle bravo --socket-dir "$3" --duration 20 >/dev/null &
+  COMMAND sh -c [["$1" --unpaced --vehicle alpha --vehicle bravo --socket-dir "$3" --duration 20 >/dev/null &
                   simulator=$!
                   "$2" --socket-dir "$3" --vehicle alpha >/dev/null & alpha=$!
                   "$2" --socket-dir "$3" --vehicle bravo; bravo=$?
                   wait $alpha; alpha=$?
                   wait $simulator && [ $alpha -eq 0 ] && exit $bravo]]
-    sh $<TARGET_FILE:multirotor-sim-headless> $<TARGET_FILE:sitl-example-client>
+    sh $<TARGET_FILE:multirotor-sim> $<TARGET_FILE:sitl-example-client>
     ${test_sockets}/pair)
 set_tests_properties(sitl-lockstep PROPERTIES TIMEOUT 60)
 

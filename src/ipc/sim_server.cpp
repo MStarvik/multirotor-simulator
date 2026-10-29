@@ -330,17 +330,12 @@ runtime::VehicleSpec SimServer::spawn_spec(const ::sim_ctl_spawn_vehicle& reques
   if (!is_finite(position) || !std::isfinite(request.yaw) || position.z > 0.0) {
     throw std::invalid_argument{"the position and yaw must be finite, and the position not below the ground"};
   }
-  if (request.controller != SIM_CONTROLLER_BUILT_IN && request.controller != SIM_CONTROLLER_SITL) {
-    throw std::invalid_argument{std::format("unknown controller {}", request.controller)};
-  }
   return {
       .name = read_name(request.name),
       .model = make_multirotor(frame),  // Throws std::invalid_argument for an impossible frame.
       .initial_state = {.position = position,
                         .attitude = from_rotation_vector({0.0, 0.0, request.yaw}),
                         .on_ground = position.z == 0.0},
-      .controller = request.controller == SIM_CONTROLLER_SITL ? runtime::ControllerKind::sitl
-                                                              : runtime::ControllerKind::built_in,
   };
 }
 

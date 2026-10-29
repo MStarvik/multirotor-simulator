@@ -17,12 +17,12 @@ namespace sim::app {
 // far enough apart that the propellers are well clear of each other.
 [[nodiscard]] Vec3 start_position(const MultirotorModel& model, std::size_t index);
 
-// A runner without vehicles yet. Vehicles get the built-in flight controller, or an
-// external one on their SITL socket in `sockets`; without sockets, only built-in.
-[[nodiscard]] runtime::SimRunner make_runner(const runtime::Options& options, const ipc::SocketDirectory* sockets,
+// A runner without vehicles yet. Each vehicle waits for an external flight
+// controller on its SITL socket in `sockets`.
+[[nodiscard]] runtime::SimRunner make_runner(const runtime::Options& options, const ipc::SocketDirectory& sockets,
                                              runtime::ClockPolicy clock);
 
-// The vehicles the options ask for, flown by external flight controllers with --sitl.
+// The vehicles the options ask for.
 [[nodiscard]] std::vector<runtime::VehicleSpec> initial_vehicles(const runtime::Options& options);
 
 }  // namespace sim::app

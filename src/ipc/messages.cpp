@@ -118,8 +118,6 @@ std::vector<std::byte> encode_vehicles(const runtime::Roster& roster) {
     const runtime::VehicleSpec& spec = roster.vehicles[i];
     sim_view_vehicle vehicle{};
     write_name(spec.name, vehicle.name);
-    vehicle.controller =
-        spec.controller == runtime::ControllerKind::sitl ? SIM_CONTROLLER_SITL : SIM_CONTROLLER_BUILT_IN;
     vehicle.rotor_count = static_cast<std::uint32_t>(std::min<std::size_t>(spec.model.rotors.size(), SIM_MAX_ROTORS));
     vehicle.propeller_radius = spec.model.propulsion.propeller_radius;
     for (std::size_t r = 0; r < vehicle.rotor_count; ++r) {
@@ -148,8 +146,6 @@ std::shared_ptr<const runtime::Roster> decode_vehicles(std::span<const std::byte
         .name = read_name(vehicle.name),
         .model = {},
         .initial_state = {},
-        .controller = vehicle.controller == SIM_CONTROLLER_SITL ? runtime::ControllerKind::sitl
-                                                                : runtime::ControllerKind::built_in,
     };
     spec.model.propulsion.propeller_radius = vehicle.propeller_radius;
     for (std::size_t r = 0; r < vehicle.rotor_count; ++r) {

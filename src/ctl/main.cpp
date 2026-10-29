@@ -37,9 +37,8 @@ Commands:
   resume                resume it
   reset                 put every vehicle back where it started
   speed FACTOR          run at FACTOR times real time
-  spawn NAME [options]  add a vehicle, with the simulator's frame unless given:
-      --sitl              wait for an external flight controller on its socket
-                          vehicles/NAME.sock, instead of the built-in controller
+  spawn NAME [options]  add a vehicle, with the simulator's frame unless given;
+                        it waits for a flight controller on vehicles/NAME.sock:
       --at N,E[,D]        where it starts, m (default: 0,0,0; D is down, so <= 0)
       --yaw DEGREES       heading, clockwise from north (default: 0)
       --rotors N, --arm-length M, --mass KG
@@ -104,7 +103,6 @@ sim_ctl_spawn_vehicle parse_spawn(std::string_view name, std::span<char* const> 
   sim_ctl_spawn_vehicle request{};
   request.header = header(SIM_CTL_SPAWN_VEHICLE);
   copy_name(name, request.name);
-  request.controller = SIM_CONTROLLER_BUILT_IN;
   for (std::size_t i = 0; i < args.size(); ++i) {
     const std::string_view option = args[i];
     const auto value = [&] {
@@ -113,9 +111,7 @@ sim_ctl_spawn_vehicle parse_spawn(std::string_view name, std::span<char* const> 
       }
       return std::string_view{args[++i]};
     };
-    if (option == "--sitl") {
-      request.controller = SIM_CONTROLLER_SITL;
-    } else if (option == "--at") {
+    if (option == "--at") {
       const auto position = parse_list(option, value(), 2, 3);
       std::ranges::copy(position, request.position);
     } else if (option == "--yaw") {

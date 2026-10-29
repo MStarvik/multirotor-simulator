@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "app/setup.hpp"
-#include "control/demo_flight.hpp"
 #include "ipc/socket_directory.hpp"
 #include "ipc/sim_server.hpp"
 #include "recorder/video_encoder.hpp"
@@ -24,9 +23,10 @@
 
 // Records a flight to a video file, rendered offscreen: no window, compositor or
 // display needed. Frames are taken at fixed intervals of simulated time, so the
-// video plays back in real time however long it took to make. Flies the demo flight
-// with the built-in controller, or whatever an external one does with --sitl, and
-// shows drawings from the viz socket like the viewer.
+// video plays back in real time however long it took to make. Like the simulator,
+// every vehicle waits for an external flight controller on its SITL socket, such as
+// multirotor-sim-pilot --demo. Shows drawings from the simulator socket like the
+// viewer.
 
 namespace {
 
@@ -38,7 +38,7 @@ int record(const runtime::Options& options) {
   }
 
   const ipc::SocketDirectory sockets{options.socket_directory};
-  runtime::SimRunner runner = app::make_runner(options, &sockets, runtime::AsFastAsPossible{});
+  runtime::SimRunner runner = app::make_runner(options, sockets, runtime::AsFastAsPossible{});
   const ipc::SimServer server{sockets.sim_socket(), runner, options.frame};
   // After the simulator socket, so that a flight controller that is already
   // waiting finds it as soon as its SITL socket accepts it.
@@ -53,16 +53,11 @@ int record(const runtime::Options& options) {
                                      options.msaa_samples, scene.meshes()};
   recorder::VideoEncoder encoder{options.output, options.width, options.height, options.frame_rate};
 
-  const auto frame_count = static_cast<std::uint64_t>(std::llround(options.duration * options.frame_rate));
+  const double duration = options.duration.value_or(10.0);
+  const auto frame_count = static_cast<std::uint64_t>(std::llround(duration * options.frame_rate));
   const auto wall_start = std::chrono::steady_clock::now();
-  control::DemoFlight demo_flight;
   for (std::uint64_t frame = 0; frame < frame_count; ++frame) {
-    const double time = static_cast<double>(frame) / options.frame_rate;
-    if (options.sitl) {
-      runner.run(std::stop_token{}, time);
-    } else {
-      demo_flight.run_until(runner, time);
-    }
+    runner.run(std::stop_token{}, static_cast<double>(frame) / options.frame_rate);
     scene.update_drawings(server.drawings());
     const runtime::Snapshot& snapshot = runner.latest();
     if (scene.update_meshes(snapshot)) {
@@ -78,7 +73,7 @@ int record(const runtime::Options& options) {
 
   const std::chrono::duration<double> wall_time = std::chrono::steady_clock::now() - wall_start;
   std::println("Wrote {} frames ({:.1f} s at {} fps, {}×{}, {}× MSAA) to {} in {:.1f} s", frame_count,
-               options.duration, options.frame_rate, options.width, options.height, renderer.msaa_samples(),
+               duration, options.frame_rate, options.width, options.height, renderer.msaa_samples(),
                options.output.native(), wall_time.count());
   return EXIT_SUCCESS;
 }

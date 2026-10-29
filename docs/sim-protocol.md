@@ -77,9 +77,9 @@ bytes.
 |---|---|---|
 | `SIM_CTL_PAUSE` | `sim_ctl_pause` (24 bytes): `paused` (1 or 0) | Pauses or resumes the simulation |
 | `SIM_CTL_RESET` | header only | Puts every vehicle back where it started, and simulation time back to 0 |
-| `SIM_CTL_SET_SPEED` | `sim_ctl_set_speed` (24 bytes): `speed` | Speed relative to real time. `SIM_UNSUPPORTED` for a simulator that isn't paced to the clock, such as a headless one without `--realtime`. |
-| `SIM_CTL_PILOT_INPUT` | `sim_ctl_pilot_input` (80 bytes): `vehicle`, `sticks[4]` | Roll, pitch, yaw and throttle sticks in [−1, 1] for a vehicle's flight controller, until replaced. The built-in controller flies with them; an external one gets them in `sim_sitl_sensors.pilot`. |
-| `SIM_CTL_SPAWN_VEHICLE` | `sim_ctl_spawn_vehicle` (104 bytes): `name`, `controller`, `rotor_count`, `arm_length`, `mass`, `position[3]`, `yaw` | Adds a vehicle, which stays until removed (also after the client disconnects). See below. |
+| `SIM_CTL_SET_SPEED` | `sim_ctl_set_speed` (24 bytes): `speed` | Speed relative to real time. `SIM_UNSUPPORTED` for a simulator that isn't paced to the clock, such as one started with `--unpaced`. |
+| `SIM_CTL_PILOT_INPUT` | `sim_ctl_pilot_input` (80 bytes): `vehicle`, `sticks[4]` | Roll, pitch, yaw and throttle sticks in [−1, 1] for a vehicle's flight controller, which gets them in `sim_sitl_sensors.pilot`, until replaced. `multirotor-sim-pilot` flies with them. |
+| `SIM_CTL_SPAWN_VEHICLE` | `sim_ctl_spawn_vehicle` (104 bytes): `name`, `rotor_count`, `arm_length`, `mass`, `position[3]`, `yaw` | Adds a vehicle, which stays until removed (also after the client disconnects). See below. |
 | `SIM_CTL_REMOVE_VEHICLE` | `sim_ctl_remove_vehicle` (48 bytes): `name` | Removes a vehicle. If it had an external flight controller, that sees its SITL socket close. |
 | `SIM_CTL_SET_OBSTACLE` | `sim_ctl_set_obstacle` (128 bytes): a `sim_obstacle` | Adds an obstacle, or replaces the one with the same name, which is how to move one. See below. |
 | `SIM_CTL_REMOVE_OBSTACLE` | `sim_ctl_remove_obstacle` (48 bytes): `name` | Removes an obstacle |
@@ -91,11 +91,9 @@ simulator's values from its command line. It starts at `position` (world frame;
 and a reset puts it back there. Its name must be unique and valid as a file name:
 up to 32 letters, digits, `-`, `_` and `.`, not starting with `.`.
 
-`controller` is `SIM_CONTROLLER_BUILT_IN` for the simulator's own attitude
-controller, flown with `SIM_CTL_PILOT_INPUT`, or `SIM_CONTROLLER_SITL` for an
-external flight controller on `<socket dir>/vehicles/<name>.sock`. That socket
-exists once the reply is sent. Like every SITL vehicle, it holds the whole
-simulation until its flight controller connects.
+Its flight controller connects to `<socket dir>/vehicles/<name>.sock`, which
+exists once the reply is sent. Like every vehicle, it holds the whole simulation
+until its flight controller connects.
 
 **Obstacles** are boxes and upright cylinders that stay until removed (also after
 the client that added them disconnects). For now they are only shown; vehicles fly
@@ -129,7 +127,7 @@ it needs to show the simulation:
 
 - **`SIM_VIEW_VEHICLES`**: `sim_view_vehicles` (32 bytes: `roster_version`,
   `count`), followed by `count` `sim_view_vehicle` (432 bytes each: `name`,
-  `controller`, `rotor_count`, `propeller_radius`, and each rotor's `position[3]`
+  `rotor_count`, `propeller_radius`, and each rotor's `position[3]`
   and `spin`). All vehicles, right after subscribing and whenever one comes or goes;
   `roster_version` increases with every change.
 - **`SIM_VIEW_OBSTACLES`**: `sim_view_obstacles` (32 bytes: `version`, `count`),

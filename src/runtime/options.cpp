@@ -28,20 +28,22 @@ Vehicles:
   --arm-length M      distance from the center to each rotor in meters (default: 0.225)
   --mass KG           vehicle mass in kilograms (default: 1.0)
 
-Flight controller:
-  --sitl              wait for an external flight controller for each vehicle, on
-                      its socket vehicles/NAME.sock, instead of flying with the
-                      built-in controller
-  --instance NAME     names this simulator, so that several can run at once: its
+Sockets:
+  --instance NAME     names the simulator, so that several can run at once: its
                       sockets go in $XDG_RUNTIME_DIR/multirotor-sim/NAME
                       (default: default)
   --socket-dir DIR    put the sockets in DIR instead
 
 Simulation:
   --seed N            seed for sensor noise (default: 1)
-  --speed FACTOR      speed relative to real time (default: 1)
-  --realtime          headless: pace to the wall clock instead of running unpaced
-  --duration SECONDS  headless and recorder: simulated time to run (default: 10)
+  --speed FACTOR      simulator: speed relative to real time (default: 1)
+  --unpaced           simulator: run as fast as the flight controllers allow,
+                      not paced to the clock
+  --duration SECONDS  simulator: exit after this much simulated time (default:
+                      run until interrupted); recorder: the length of the video
+                      (default: 10)
+  --viewer            simulator: open a viewer; or attach one at any time with
+                      multirotor-sim-viewer
 
 Viewer and recorder:
   --msaa N            anti-aliasing samples per pixel: 1 (off), 2, 4 or 8 (default: 4)
@@ -51,8 +53,6 @@ Viewer and recorder:
                       (default: follow)
   --camera-distance M distance from the camera to the vehicle (default: 2.4)
   --camera-position N,E,D  where the fixed camera is, m (default: -8,-8,-3)
-  --no-viewer         simulator: don't open a viewer; attach one later with
-                      multirotor-sim-viewer
   --exit-with-simulator  viewer: exit when the simulator does, instead of
                       waiting for the next one
 
@@ -61,6 +61,10 @@ Recorder:
                       for an animated image that browsers autoplay
   --size WxH          video size in pixels (default: 1280x720)
   --fps N             frames per second of simulated time (default: 30)
+
+Pilot:
+  --demo              fly the demo flight (take off, hover, fly forward, hover)
+                      instead of the sticks, printing the state every second
 
   --help              show this help
 )";
@@ -174,8 +178,6 @@ std::optional<Options> parse_options(std::span<char* const> args) {
       options.frame.arm_length = parse_number<double>(option, value());
     } else if (option == "--mass") {
       options.frame.body.mass = parse_number<double>(option, value());
-    } else if (option == "--sitl") {
-      options.sitl = true;
     } else if (option == "--instance") {
       options.instance = validated_name(option, value());
       instance_given = true;
@@ -185,8 +187,10 @@ std::optional<Options> parse_options(std::span<char* const> args) {
       options.seed = parse_number<std::uint64_t>(option, value());
     } else if (option == "--speed") {
       options.speed = parse_number<double>(option, value());
-    } else if (option == "--realtime") {
-      options.realtime = true;
+    } else if (option == "--unpaced") {
+      options.unpaced = true;
+    } else if (option == "--demo") {
+      options.demo = true;
     } else if (option == "--camera-distance") {
       options.camera_distance = parse_number<double>(option, value());
     } else if (option == "--follow") {
@@ -195,8 +199,8 @@ std::optional<Options> parse_options(std::span<char* const> args) {
       options.camera = parse_camera_mode(value());
     } else if (option == "--camera-position") {
       options.camera_position = parse_position(option, value());
-    } else if (option == "--no-viewer") {
-      options.no_viewer = true;
+    } else if (option == "--viewer") {
+      options.viewer = true;
     } else if (option == "--exit-with-simulator") {
       options.exit_with_simulator = true;
     } else if (option == "--output") {
@@ -220,7 +224,7 @@ std::optional<Options> parse_options(std::span<char* const> args) {
     }
   }
 
-  if (options.speed <= 0.0 || options.duration <= 0.0 || options.camera_distance <= 0.0) {
+  if (options.speed <= 0.0 || options.duration.value_or(1.0) <= 0.0 || options.camera_distance <= 0.0) {
     throw std::invalid_argument{"speed, duration and camera distance must be positive"};
   }
   if (options.frame_rate == 0 || options.width == 0 || options.height == 0) {

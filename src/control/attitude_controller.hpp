@@ -14,9 +14,9 @@ struct AttitudeControllerGains {
   double climb = 4.0;           // Climb rate error to vertical acceleration, 1/s.
 };
 
-// A minimal built-in flight controller, so the vehicle can be flown before a real
-// one is connected. Sticks set the roll and pitch angles, yaw rate and climb rate.
-// It reads the true vehicle state; a real flight controller would only see sensors.
+// A minimal flight controller, flown by multirotor-sim-pilot over the SITL socket.
+// Sticks set the roll and pitch angles, yaw rate and climb rate. It reads the true
+// vehicle state; a real flight controller would only see sensors.
 class AttitudeController final : public runtime::FlightController {
  public:
   explicit AttitudeController(const MultirotorModel& model, AttitudeControllerGains gains = {});

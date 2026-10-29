@@ -27,19 +27,21 @@ struct Options {
   std::vector<std::string> vehicles{"0"};
   double step_size = 0.001;  // s
   std::uint64_t seed = 1;    // Sensor noise seed.
-  bool sitl = false;         // Wait for an external flight controller instead of the built-in one.
   std::string instance = "default";         // Names this simulator's socket directory.
   std::filesystem::path socket_directory;  // Where the SITL and drawing sockets are created.
   double speed = 1.0;      // Simulation speed relative to real time.
+  bool unpaced = false;    // Simulator: run as fast as the flight controllers allow.
   std::uint32_t msaa_samples = 4;  // Viewer only: anti-aliasing samples per pixel.
   double camera_distance = 2.4;    // Viewer only: follow camera distance, m.
   std::string follow;              // Viewer and recorder: the vehicle the camera follows; empty for the first.
   CameraMode camera = CameraMode::follow;  // Viewer and recorder.
   Vec3 camera_position{-8.0, -8.0, -3.0};  // Viewer and recorder, CameraMode::fixed: world frame, m.
-  bool no_viewer = false;            // Simulator: don't open a viewer.
+  bool viewer = false;               // Simulator: open a viewer.
   bool exit_with_simulator = false;  // Viewer: exit when the simulator does, rather than waiting for another.
-  bool realtime = false;   // Headless only: pace to the wall clock.
-  double duration = 10.0;  // Headless and recorder: simulated seconds to run.
+  // Simulated seconds to run. Simulator: then exit (default: until interrupted).
+  // Recorder: the length of the video (default: 10).
+  std::optional<double> duration;
+  bool demo = false;  // Pilot: fly the demo flight instead of the sticks.
   std::filesystem::path output;  // Recorder only: the video file to write.
   std::uint32_t frame_rate = 30;  // Recorder only.
   std::uint32_t width = 1280;     // Recorder only: video size in pixels.

@@ -1,10 +1,14 @@
+#include <algorithm>
+#include <atomic>
 #include <cerrno>
+#include <chrono>
 #include <csignal>
 #include <cstdio>
 #include <cstdlib>
 #include <exception>
 #include <filesystem>
 #include <format>
+#include <limits>
 #include <optional>
 #include <print>
 #include <stdexcept>
@@ -23,10 +27,13 @@
 #include "ipc/socket_directory.hpp"
 #include "runtime/options.hpp"
 #include "runtime/sim_runner.hpp"
+#include "sim/math.hpp"
 
-// The simulator, paced to the wall clock. Opens a viewer (multirotor-sim-viewer, a
-// separate process) and runs until it is closed, or without one with --no-viewer,
-// until interrupted. More viewers can attach at any time.
+// The simulator. Paced to the wall clock, or with --unpaced as fast as the flight
+// controllers allow. Every vehicle waits for an external flight controller on its
+// SITL socket. Runs until interrupted, for --duration simulated seconds, or with
+// --viewer until the viewer it opens (multirotor-sim-viewer, a separate process) is
+// closed. Viewers can attach at any time.
 
 extern char** environ;
 
@@ -73,8 +80,10 @@ pid_t start_viewer(const runtime::Options& options, const sigset_t& original_sig
 }
 
 int run(const runtime::Options& options, const sigset_t& waited_signals, const sigset_t& original_signal_mask) {
+  const runtime::ClockPolicy clock = options.unpaced ? runtime::ClockPolicy{runtime::AsFastAsPossible{}}
+                                                     : runtime::ClockPolicy{runtime::RealTime{.speed = options.speed}};
   const ipc::SocketDirectory sockets{options.socket_directory};
-  runtime::SimRunner runner = app::make_runner(options, &sockets, runtime::RealTime{.speed = options.speed});
+  runtime::SimRunner runner = app::make_runner(options, sockets, clock);
   const ipc::SimServer server{sockets.sim_socket(), runner, options.frame};
   // After the simulator socket, so that a flight controller that is already
   // waiting finds it as soon as its SITL socket accepts it.
@@ -82,18 +91,27 @@ int run(const runtime::Options& options, const sigset_t& waited_signals, const s
     runner.add_vehicle(std::move(vehicle));
   }
 
+  const auto wall_start = std::chrono::steady_clock::now();
+  std::atomic<bool> diverged = false;
   // Declared last, so it is stopped and joined before the server and runner go away.
-  const std::jthread simulation_thread{[&runner](std::stop_token stop) {
+  const std::jthread simulation_thread{[&runner, &options, &diverged](std::stop_token stop) {
     try {
-      runner.run(stop);
+      runner.run(stop, options.duration.value_or(std::numeric_limits<double>::infinity()));
     } catch (const std::exception& error) {
       std::println(stderr, "fatal: simulation failed: {}", error.what());
       std::abort();
     }
+    if (!stop.stop_requested()) {
+      const runtime::Snapshot& snapshot = runner.latest();
+      diverged = !std::ranges::all_of(snapshot.vehicles, [](const runtime::VehicleSnapshot& vehicle) {
+        return is_finite(vehicle.state.position) && is_finite(vehicle.state.attitude);
+      });
+      ::kill(::getpid(), SIGUSR1);  // Reached the duration.
+    }
   }};
 
   std::optional<pid_t> viewer;
-  if (!options.no_viewer) {
+  if (options.viewer) {
     viewer = start_viewer(options, original_signal_mask);
   }
 
@@ -101,6 +119,16 @@ int run(const runtime::Options& options, const sigset_t& waited_signals, const s
   while (true) {
     int signal = 0;
     sigwait(&waited_signals, &signal);
+    if (signal == SIGUSR1 && options.duration) {
+      const std::chrono::duration<double> wall_time = std::chrono::steady_clock::now() - wall_start;
+      std::println("Simulated {:.1f} s in {:.3f} s of wall time ({:.0f}× real time)", *options.duration,
+                   wall_time.count(), *options.duration / wall_time.count());
+      if (diverged) {
+        std::println(stderr, "error: the simulation diverged");
+        exit_status = EXIT_FAILURE;
+      }
+      break;
+    }
     if (signal != SIGCHLD) {
       break;  // Interrupted or terminated.
     }
@@ -108,7 +136,7 @@ int run(const runtime::Options& options, const sigset_t& waited_signals, const s
     if (viewer && ::waitpid(*viewer, &status, WNOHANG) == *viewer) {
       viewer.reset();
       if (!WIFEXITED(status) || WEXITSTATUS(status) != EXIT_SUCCESS) {
-        std::println(stderr, "error: the viewer failed; use --no-viewer to run without one");
+        std::println(stderr, "error: the viewer failed");
         exit_status = EXIT_FAILURE;
       }
       break;  // The window was closed.
@@ -131,6 +159,7 @@ int main(int argc, char** argv) {
   sigaddset(&waited_signals, SIGINT);
   sigaddset(&waited_signals, SIGTERM);
   sigaddset(&waited_signals, SIGCHLD);
+  sigaddset(&waited_signals, SIGUSR1);  // The simulation reached --duration.
   sigset_t original_signal_mask;
   pthread_sigmask(SIG_BLOCK, &waited_signals, &original_signal_mask);
 

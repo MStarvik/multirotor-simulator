@@ -111,14 +111,16 @@ void SimRunner::run(std::stop_token stop, double until) {
       anchor_sim_time = rate_sim_time = simulation_.time();
     }
 
-    const bool stepped = !paused_ && step();
-    waiting_for_controllers_ = !paused_ && !stepped;
+    // Unpaced, nothing would hold a simulation without vehicles.
+    const bool idle = paused_ || (vehicles_.empty() && std::holds_alternative<AsFastAsPossible>(clock_));
+    const bool stepped = !idle && step();
+    waiting_for_controllers_ = !idle && !stepped;
     if (!stepped) {
-      // Paused, or a flight controller is not ready (it waits briefly itself).
+      // Idle, or a flight controller is not ready (it waits briefly itself).
       real_time_factor_ = 0.0;
       repace_ = true;
       publish();
-      if (paused_) {
+      if (idle) {
         std::this_thread::sleep_for(pause_poll_interval);
       }
       continue;
